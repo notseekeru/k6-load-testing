@@ -126,20 +126,9 @@ export default function () {
 
     // The DB defaults a new run to `pending` and every chat route refuses anything else, so /start belongs
     // in the loop.
-    send(
-        "POST",
-        `/interviews/${id}/start`,
-        null,
-        "POST /api/interviews/{id}/start",
-        [200],
-    );
+    send("POST", "/interviews/{id}/start", null, [200], id);
 
-    let closing = stream(
-        `/interviews/${id}/chat/kickoff`,
-        null,
-        "POST /api/interviews/{id}/chat/kickoff",
-        "opener",
-    );
+    let closing = stream("/interviews/{id}/chat/kickoff", null, "opener", id);
     const turns = randInt(TURNS_MIN, TURNS_MAX);
     for (let turn = 1; !closing && turn <= turns; turn++) {
         sleep(rand(THINK_MIN_S, THINK_MAX_S));
@@ -147,12 +136,7 @@ export default function () {
             interview_id: id,
             content: answerText(),
         });
-        closing = stream(
-            `/interviews/${id}/chat/stream`,
-            body,
-            "POST /api/interviews/{id}/chat/stream",
-            "answer",
-        );
+        closing = stream("/interviews/{id}/chat/stream", body, "answer", id);
     }
 
     const finished = http.post(
@@ -180,8 +164,8 @@ export default function () {
 
 // One turn of SSE from the client's side: the deltas, then `done`. A dropped turn or an error frame
 // fails here, in the same report as the timing.
-function stream(path, body, name, label) {
-    const res = http.post(`${API}${path}`, body, params(name));
+function stream(route, body, label, id) {
+    const res = http.post(url(route, id), body, params(`POST /api${route}`));
     const frames = parseSse(res.body);
     const last = frames.length ? frames[frames.length - 1] : null;
     check(res, {
@@ -226,71 +210,43 @@ function transcript(id) {
 // such, so the happy path only runs under the cap. Excluded on purpose: /billing/* (money rails with
 // real provider side effects), the BYOK writes (they decide who pays for the turns), voice TTS/STT and
 // PDF extract (the doc excludes both, and PDF import OOMs the pod).
-function surface(id) {
-    const reads = [
-        ["GET /api/interviews", `/interviews`, [200]],
-        ["GET /api/stats/dimensions", "/stats/dimensions", [200]],
-        ["GET /api/stats/analytics", "/stats/analytics", [200]],
-        ["GET /api/usage", "/usage", [200]],
-        ["GET /api/templates", "/templates", [200]],
-        ["GET /api/resumes", "/resumes", [200]],
-        ["GET /api/settings/llm", "/settings/llm", [200]],
-        ["GET /api/voice", "/voice", [200]],
-        [
-            `GET /api/interviews/{id}/offer`,
-            `/interviews/${id}/offer`,
-            [200, 404],
-        ],
-    ];
-    for (const [name, path, expected] of reads)
-        send("GET", path, null, name, expected);
+const READS = [
+    "/interviews",
+    "/stats/dimensions",
+    "/stats/analytics",
+    "/usage",
+    "/templates",
+    "/resumes",
+    "/settings/llm",
+    "/voice",
+];
 
-    send(
-        "POST",
-        `/interviews/${id}/archive`,
-        null,
-        "POST /api/interviews/{id}/archive",
-        [200],
-    );
-    send(
-        "DELETE",
-        `/interviews/${id}/archive`,
-        null,
-        "DELETE /api/interviews/{id}/archive",
-        [200],
-    );
+function surface(id) {
+    for (const route of READS) send("GET", route, null, [200], id);
+    send("GET", "/interviews/{id}/offer", null, [200, 404], id);
+
+    send("POST", "/interviews/{id}/archive", null, [200], id);
+    send("DELETE", "/interviews/{id}/archive", null, [200], id);
 
     const resume = send(
         "POST",
         "/resumes",
         { name: "sweep resume", text: answerText() },
-        "POST /api/resumes",
         [201, 409],
+        id,
     );
     if (resume.status === 201)
-        send(
-            "DELETE",
-            `/resumes/${safe(resume).id}`,
-            null,
-            "DELETE /api/resumes/{id}",
-            [204],
-        );
+        send("DELETE", "/resumes/{id}", null, [204], safe(resume).id);
 
     const template = send(
         "POST",
         "/templates",
         { ...randomInterview(), name: "sweep template" },
-        "POST /api/templates",
         [201, 409],
+        id,
     );
     if (template.status === 201)
-        send(
-            "DELETE",
-            `/templates/${safe(template).id}`,
-            null,
-            "DELETE /api/templates/{id}",
-            [204],
-        );
+        send("DELETE", "/templates/{id}", null, [204], safe(template).id);
 
     send(
         "POST",
@@ -300,17 +256,19 @@ function surface(id) {
             route: "/sweep",
             component_stack: "",
         },
-        "POST /api/client-errors",
         [204],
+        id,
     );
 }
 
 // One status check per request, over the set of statuses the app documents for that route: a 5xx still
-// fails while a cap rejection does not read as an error.
-function send(method, path, body, name, expected) {
+// fails while a cap rejection does not read as an error. The tag keeps the {id} token so one route stays
+// one tag across every virtual user.
+function send(method, route, body, expected, id) {
+    const name = `${method} /api${route}`;
     const res = http.request(
         method,
-        `${API}${path}`,
+        url(route, id),
         body === null ? null : JSON.stringify(body),
         {
             ...params(name),
@@ -322,6 +280,10 @@ function send(method, path, body, name, expected) {
             expected.includes(r.status),
     });
     return res;
+}
+
+function url(route, id) {
+    return `${API}${route.replace("{id}", id)}`;
 }
 
 function params(name, tags) {
