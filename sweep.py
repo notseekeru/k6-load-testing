@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 SMOKE_LEVELS = 4
+DEFAULT_MAX_VUS = 800
 DELETE_WORKERS = 32
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
 LEVEL_TIMEOUT_S = 900
@@ -94,8 +95,10 @@ def cleanup(api_url, sweep_sub):
     return deleted
 
 
-def run_level(level, args):
+def run_level(level, args, deleted):
     summary_path = RESULTS_DIR / f"level-{int(level)}.json"
+    # Left over from an earlier run of this level, it would be read as this run's numbers.
+    summary_path.unlink(missing_ok=True)
     env = {
         **os.environ,
         "API_URL": args.api_url,
@@ -122,12 +125,8 @@ def run_level(level, args):
 
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     metrics = summary.get("metrics", {})
-    thresholds_ok = all(
-        check["ok"]
-        for metric in metrics.values()
-        for check in metric.get("thresholds", {}).values()
-    )
-    passed = completed.returncode == 0 and thresholds_ok
+    # k6 exits 99 on a failed threshold, so the exit code is the verdict.
+    passed = completed.returncode == 0
     measured = measured_metrics(metrics)
     return {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -139,29 +138,31 @@ def run_level(level, args):
         "iterations": measured.get("iterations"),
         "http_reqs": measured.get("http_reqs"),
         "seconds": round(elapsed, 1),
-        "deleted_before": "",
+        "deleted_before": deleted,
     }
 
 
-# The exported digest carries p(95) but not always p(99): fall back rather than write an empty cell.
+# The exported digest carries p(95) but not always p(99), so p99 falls back to max. A metric that is
+# absent stays blank: a zero would read as a perfect number.
 def measured_metrics(metrics):
     duration = pick_metric(metrics, "http_req_duration")
     failed = pick_metric(metrics, "http_req_failed")
-    iterations = metrics.get("iterations", {}).get("values", {}).get("count", 0)
     return {
-        "p95": round(duration.get("p(95)", duration.get("med", 0)), 1),
-        "p99": round(duration.get("p(99)", duration.get("max", 0)), 1),
-        "err_rate": round(failed.get("rate", 0), 5),
-        "iterations": int(iterations),
+        "p95": rounded(duration.get("p(95)", duration.get("med"))),
+        "p99": rounded(duration.get("p(99)", duration.get("max"))),
+        "err_rate": rounded(failed.get("rate"), 5),
+        "iterations": int(metrics.get("iterations", {}).get("values", {}).get("count", 0)),
         "http_reqs": int(metrics.get("http_reqs", {}).get("values", {}).get("count", 0)),
     }
 
 
+def rounded(value, places=1):
+    return None if value is None else round(value, places)
+
+
+# phase:measure only: the untagged metric folds the ramp and the warm-up into the same number.
 def pick_metric(metrics, name):
-    for key, value in metrics.items():
-        if key.startswith(name) and "phase:measure" in key:
-            return value.get("values", {})
-    return metrics.get(name, {}).get("values", {})
+    return metrics.get(f"{name}{{phase:measure}}", {}).get("values", {})
 
 
 def main():
@@ -169,7 +170,7 @@ def main():
     parser.add_argument("--api-url", required=True, help="e.g. https://maxterview.seekeru.tech/api")
     parser.add_argument("--sweep-sub", required=True, help="the sweep owner_id every listed row must have")
     parser.add_argument("--k6", default="k6")
-    parser.add_argument("--max-vus", type=int, default=800, help="top of the ladder; doubling stops here")
+    parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
     parser.add_argument("--smoke", action="store_true", help="shorten the phases for a harness check")
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between steps (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
@@ -194,75 +195,73 @@ def main():
         print(f"{args.only} VUs: {rows['verdict']} p95={rows['p95_ms']}ms p99={rows['p99_ms']}ms err={rows['err_rate']}")
         return
 
-    levels, level = [], 25
-    while level <= args.max_vus:
-        levels.append(level)
-        level *= 2
-
+    levels = ladder(args.max_vus)
     csv_path = RESULTS_DIR / f"sweep-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
-    columns = ["ts", "vus", "verdict", "p95_ms", "p99_ms", "err_rate", "iterations", "http_reqs", "seconds", "deleted_before"]
     print(f"ladder: {levels} (max {args.max_vus}), csv {csv_path}")
 
-    with csv_path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        last_pass = 0
-        first_fail = None
+    last_pass = 0
+    first_fail = None
 
-        for index, vus in enumerate(levels):
-            deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
-            row = run_step(writer, handle, vus, args, deleted)
-            print(f"{vus} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}")
-            if row["verdict"] == "pass":
-                last_pass = vus
-                continue
-            if index < SMOKE_LEVELS:
-                sys.exit(f"ABORT: {vus} VUs failed during the smoke checks. That is not a load problem: fix the test or the app.")
-            first_fail = vus
-            break
+    for index, vus in enumerate(levels):
+        row = run_step(csv_path, vus, args)
+        print(f"{vus} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}")
+        if row["verdict"] == "pass":
+            last_pass = vus
+            continue
+        if index < SMOKE_LEVELS:
+            sys.exit(f"ABORT: {vus} VUs failed during the smoke checks. That is not a load problem: fix the test or the app.")
+        first_fail = vus
+        break
 
-        if first_fail is None:
-            print(f"no failure up to {last_pass} VUs; raise --max-vus")
-            return
+    if first_fail is None:
+        print(f"no failure up to {last_pass} VUs; raise --max-vus")
+        return
 
-        low, high = last_pass, first_fail
-        tolerance = max(25, int(0.1 * low))
-        while high - low > tolerance:
-            mid = (low + high) // 2
-            deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
-            row = run_step(writer, handle, mid, args, deleted)
-            print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
-            if row["verdict"] == "pass":
-                low = mid
-            else:
-                high = mid
+    low, high = last_pass, first_fail
+    gap = tolerance(low)
+    while high - low > gap:
+        mid = (low + high) // 2
+        row = run_step(csv_path, mid, args)
+        print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
+        if row["verdict"] == "pass":
+            low = mid
+        else:
+            high = mid
 
-        print(f"boundary: {low} VUs pass, {high} VUs fail (gap under {tolerance}); csv {csv_path}")
+    print(f"boundary: {low} VUs pass, {high} VUs fail (gap under {gap}); csv {csv_path}")
+
+
+def ladder(max_vus):
+    levels, level = [], 25
+    while level <= max_vus:
+        levels.append(level)
+        level *= 2
+    return levels
+
+
+def tolerance(low):
+    return max(25, int(0.1 * low))
 
 
 # Framework-free and run before any request leaves the box: the ladder and the tolerance are what the
 # search depends on.
 def self_check():
-    levels, level = [], 25
-    while level <= 800:
-        levels.append(level)
-        level *= 2
+    levels = ladder(DEFAULT_MAX_VUS)
     assert levels == [25, 50, 100, 200, 400, 800], levels
-    low, high = levels[SMOKE_LEVELS - 1], levels[SMOKE_LEVELS]
-    assert max(25, int(0.1 * low)) < high - low, (low, high)
+    assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
 
 
 def run_one(vus, args):
-    if not args.no_cleanup:
-        cleanup(args.api_url, args.sweep_sub)
-    return run_level(vus, args)
+    return run_level(vus, args, 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub))
 
 
-def run_step(writer, handle, vus, args, deleted):
-    row = run_level(vus, args)
-    row["deleted_before"] = deleted
-    writer.writerow(row)
-    handle.flush()
+def run_step(csv_path, vus, args):
+    row = run_one(vus, args)
+    with csv_path.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, row.keys())
+        if handle.tell() == 0:
+            writer.writeheader()
+        writer.writerow(row)
     return row
 
 
