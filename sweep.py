@@ -9,8 +9,8 @@ Rows are deleted between steps through the API, so the account the loop reads st
 the curve is not partly made of the test's own writes. The cleanup refuses to touch anything unless
 every interview the API returns belongs to --sweep-sub.
 
-Runbook and flags: README. TOKEN and HOST_HEADER come from the environment and reach both this script
-and k6.
+Runbook and flags: README. TOKEN and HOST_HEADER come from .env or the environment and reach both this
+script and k6.
 """
 
 import argparse
@@ -32,8 +32,29 @@ DELETE_WORKERS = 32
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
 LEVEL_TIMEOUT_S = 900
 RESULTS_DIR = Path(__file__).with_name("results")
-TOKEN = os.getenv("TOKEN", "")
-HOST_HEADER = os.getenv("HOST_HEADER", "")
+ENV_FILE = Path(__file__).with_name(".env")
+
+
+# AI HERE: KEY=value only, no export prefix, quotes or interpolation.
+def env_file():
+    env = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not key.strip().startswith("#"):
+                env[key.strip()] = value.strip()
+    return env
+
+
+DOTENV = env_file()
+
+
+def cfg(key, fallback=""):
+    return os.getenv(key) or DOTENV.get(key) or fallback
+
+
+TOKEN = cfg("TOKEN")
+HOST_HEADER = cfg("HOST_HEADER")
 
 
 def call(method, url, body=None, timeout=120):
@@ -95,6 +116,7 @@ def run_level(level, args, deleted):
     # Left over from an earlier run of this level, it would be read as this run's numbers.
     summary_path.unlink(missing_ok=True)
     env = {
+        **DOTENV,
         **os.environ,
         "API_URL": args.api_url,
         "TARGET_VUS": str(int(level)),
@@ -162,7 +184,7 @@ def pick_metric(metrics, name):
 
 def main():
     parser = argparse.ArgumentParser(description="k6 sweep ladder driver")
-    parser.add_argument("--api-url", required=True, help="e.g. https://maxterview.seekeru.tech/api")
+    parser.add_argument("--api-url", default="", help="e.g. https://host/api; API_URL from .env when unset")
     parser.add_argument("--sweep-sub", required=True, help="the sweep owner_id every listed row must have")
     parser.add_argument("--k6", default="k6")
     parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
@@ -172,7 +194,9 @@ def main():
     parser.add_argument("--only", type=int, help="run one level and stop")
     args = parser.parse_args()
 
-    args.api_url = args.api_url.rstrip("/")
+    args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
+    if not args.api_url:
+        sys.exit("ABORT: --api-url or API_URL in .env is required")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     self_check()
 

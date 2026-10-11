@@ -15,27 +15,20 @@ which lives outside this repo. Code comments defer to it. This file owns how to 
 - A sweep identity of its own, passed as `--sweep-sub`, so the rows the cleanup deletes are known to be
   the run's.
 
+## Configure
+
+Copy `.env.example` to `.env` and fill it in. Both entry points read it, and a value exported in the
+shell wins over the file. k6 resolves the path against the directory you run from, so run from the
+repo root.
+
 ## Run
 
 ```sh
-API_URL=https://host/api TOKEN=... k6 run main.js
-TOKEN=... HOST_HEADER=... python3 sweep.py --api-url https://host/api --sweep-sub <account-id>
+k6 run main.js
+python3 sweep.py --sweep-sub <account-id>
 ```
 
 `python3 sweep.py --help` lists the flags.
-
-## Env
-
-| Variable                          | Default       | Meaning                                                                                          |
-| --------------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
-| `API_URL`                         | required      | Base URL including the API path prefix.                                                          |
-| `TARGET_VUS`                      | 25            | Virtual users.                                                                                   |
-| `TURNS_MIN` / `TURNS_MAX`         | 2 / 8         | Answers per interview.                                                                           |
-| `THINK_MIN_S` / `THINK_MAX_S`     | 1 / 3         | Pause between answers.                                                                           |
-| `TOKEN`                           | unset         | Bearer token, for a target that wants one.                                                       |
-| `HOST_HEADER`                     | unset         | `Host` override, for an ingress that routes by host.                                             |
-| `SUMMARY_PATH`                    | unset         | Where `handleSummary` writes the k6 JSON.                                                        |
-| `RAMP_S` / `WARM_S` / `MEASURE_S` | 30 / 60 / 300 | Phase lengths. The driver sets these for a harness check; a run for the record leaves them unset. |
 
 ## Output
 

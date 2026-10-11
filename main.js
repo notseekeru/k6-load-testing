@@ -4,11 +4,26 @@
 import { check, fail, sleep } from "k6";
 import http from "k6/http";
 
-const API = (__ENV.API_URL || "").replace(/\/+$/, "");
+// .env beside the script, read once at init. AI HERE: KEY=value only, no export prefix, quotes or
+// interpolation. k6 resolves the path against the run directory, not this file.
+const DOTENV = (() => {
+    const env = {};
+    try {
+        for (const line of open(".env").split("\n")) {
+            const at = line.indexOf("=");
+            const key = line.slice(0, at).trim();
+            if (at > 0 && !key.startsWith("#"))
+                env[key] = line.slice(at + 1).trim();
+        }
+    } catch (e) {}
+    return env;
+})();
+
+const cfg = (key, fallback) => __ENV[key] || DOTENV[key] || fallback;
+
+const API = cfg("API_URL", "").replace(/\/+$/, "");
 if (!API)
-    throw new Error(
-        "API_URL is required, e.g. API_URL=https://maxterview.seekeru.tech/api",
-    );
+    throw new Error("API_URL is required: set it in .env or the environment");
 
 const TARGET_VUS = num("TARGET_VUS", 25);
 const TURNS_MIN = num("TURNS_MIN", 2);
@@ -17,8 +32,8 @@ const THINK_MIN_S = num("THINK_MIN_S", 1);
 const THINK_MAX_S = num("THINK_MAX_S", 3);
 const ANSWER_MIN_CHARS = 200;
 const ANSWER_MAX_CHARS = 1200;
-const TOKEN = __ENV.TOKEN || "";
-const HOST_HEADER = __ENV.HOST_HEADER || "";
+const TOKEN = cfg("TOKEN", "");
+const HOST_HEADER = cfg("HOST_HEADER", "");
 
 const RAMP_S = num("RAMP_S", 30);
 const WARM_S = num("WARM_S", 60);
@@ -310,8 +325,7 @@ function safe(res) {
 }
 
 function num(key, fallback) {
-    const raw = __ENV[key];
-    return raw === undefined || raw === "" ? fallback : Number(raw);
+    return Number(cfg(key, fallback));
 }
 
 function randInt(min, max) {
