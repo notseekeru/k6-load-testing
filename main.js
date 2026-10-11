@@ -1,11 +1,5 @@
 // SRE.md owns the question, the workload, the phases and the gates; this file implements them, so a
-// change to any of those belongs there first.
-//
-//   API_URL=https://maxterview.seekeru.tech/api TARGET_VUS=25 k6 run main.js
-//
-// Env: API_URL (required), TARGET_VUS, TURNS_MIN, TURNS_MAX, THINK_MIN_S, THINK_MAX_S, TOKEN,
-//      HOST_HEADER, SUMMARY_PATH. RAMP_S, WARM_S and MEASURE_S override the doc's phases: the driver
-//      sets them for a harness check, and a run for the record leaves them unset.
+// change to any of those belongs there first. Runbook and env: README.
 
 import { check, fail, sleep } from "k6";
 import http from "k6/http";

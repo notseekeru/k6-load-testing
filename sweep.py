@@ -9,13 +9,8 @@ Rows are deleted between steps through the API, so the account the loop reads st
 the curve is not partly made of the test's own writes. The cleanup refuses to touch anything unless
 every interview the API returns belongs to --sweep-sub.
 
-Usage:
-  HOST_HEADER=... python3 sweep.py --api-url https://host/api --sweep-sub user_abc123
-  python3 sweep.py ... --cleanup-only
-  python3 sweep.py ... --only 200 --smoke
-
-Output: results/sweep-<utc>.csv, one row per level. TOKEN and HOST_HEADER come from the environment
-and reach both this script and k6.
+Runbook and flags: README. TOKEN and HOST_HEADER come from the environment and reach both this script
+and k6.
 """
 
 import argparse
