@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ladder driver for the k6 sweep (SRE.md).
+"""Ladder driver for the k6 sweep (SRE-LOADTESTING.md).
 
 Levels double. A failure in the first four stops the sweep: that is a broken test or a broken app, not
 load. The first failure above them is the top of the range, and the gap below it is binary-searched
@@ -71,7 +71,7 @@ def call(method, url, body=None, timeout=120):
         return response.status, (json.loads(raw) if raw else None)
 
 
-# The sweep identity is decision 10 in SRE.md: its own rows, its own turn counter, so a delete set
+# The sweep identity is decision 10 in SRE-LOADTESTING.md: its own rows, its own turn counter, so a delete set
 # is known to be the run's. Any foreign owner here means the identity is wrong and the abort is the
 # only safe move: this deletes prod's rows.
 def cleanup(api_url, sweep_sub):

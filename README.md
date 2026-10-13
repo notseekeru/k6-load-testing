@@ -4,7 +4,7 @@
 reads the review, then walks the rest of the signed-in surface. `sweep.py` drives the same workload as
 a ladder, deletes the run's rows between steps and writes one CSV row per level.
 
-The question, the phases, the gates and the decisions are in `SRE.md`, the experiment's design doc,
+The question, the phases, the gates and the decisions are in `SRE-LOADTESTING.md`, the experiment's design doc,
 which lives outside this repo. Code comments defer to it. This file owns how to run.
 
 ## Requirements
