@@ -36,6 +36,7 @@ Commits are atomic: one logical change per commit, scoped to a coherent set of f
 - **Data Safety:** Never execute commands that risk uncommitted or unstaged data without explicit user confirmation.
 - **Security:** **ZERO TOUCH POLICY ON CREDENTIALS/SECRETS UNTIL EXPLICITLY STATED.** Do not read, fetch, display, store, or infer any credential, token, or secret. If a task requires one, ALWAYS ask the user.
 - **No comments:** Code comments are banned. One survives only if omitting it causes a wrong edit or data loss and the code cannot state the fact. `AI HERE:` is the only other allowed form. No banners, no step labels, no restating a name, value, type or branch. Docs and commit text are out of scope.
+- **No driftable facts:** A comment or doc carries a constraint, a reason or a trap, never a fact that goes stale: no counts, revisions, versions, inventories, dates or `currently`. Restate a moving fact and the next change makes it wrong.
 - **No Over-Explaining:** State the thing once, in the fewest words that carry it. No preamble, no caveats, no restating the request, no closing summary, no "why this matters". A label is the fact, not a sentence about the fact. Detail the user genuinely needs belongs in the docs, nowhere else.
 - **Minimalism:** Functionality and signal is enough. Ship the shortest artifact that works: no filler, decoration, hedging, or restated premise. Applies to code, docs, prose, and responses alike.
 - **Do Not Rewrite Working Copy:** Existing user-facing strings, labels, docs and prose are not yours to reword. Polish is structure, spacing and hierarchy; it is never a reason to touch a line that already works. A refactor leaves the words alone. Never expand a fact into a clause, never add a derived number, unit or reset time nobody asked for, and never restate a value that another surface already owns. Correctness fixes change the fewest words and keep the original voice; if a line must change, quote the old one and the reason first.
@@ -52,3 +53,4 @@ Commits are atomic: one logical change per commit, scoped to a coherent set of f
 ## Interaction Style
 
 - **Laconic:** Minimize token usage while maintaining clarity. No fluff. Answer first, then only the detail required to act.
+- **Compare in a table:** A comparison made to reach a clear understanding gets a table, one row per option and one column per criterion. Prose is for what a table cannot carry; a table that restates prose is still noise.
