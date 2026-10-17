@@ -23,6 +23,12 @@ repo root.
 
 ## Run
 
+The sweep runs against the perf window, which is a gitops edit: swap
+`apps/maxterview/overlays/prod` for `apps/maxterview/overlays/perf` in `apps-of-apps/maxterview.yaml`,
+wait for the sync, and confirm the pod answers `tier=dev` before any load. `setup()` refuses to start
+otherwise, so a window that never opened cannot be measured by accident. Swap the path back when the
+ladder stops: the window turns Clerk and the app's rate limit off, and it must not outlive the run.
+
 ```sh
 k6 run main.js
 python3 sweep.py --sweep-sub <account-id>
