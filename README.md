@@ -1,46 +1,48 @@
-# k6 load testing
+# k6 load harness
 
-`main.js` is a k6 workload: one virtual user creates an interview, answers it over SSE, finishes it,
-reads the review, then walks the rest of the signed-in surface. `sweep.py` drives the same workload as
-a ladder, deletes the run's rows between steps and writes one CSV row per level.
+One virtual user walks the whole surface: it creates a run, starts it, opens it, answers turn by turn
+over SSE, finishes it, reads the review, then works through the read endpoints. `sweep.py` drives that
+workload as a ladder: it climbs from the first level, brackets the first level that fails, binary
+searches the gap below it, re-runs the highest passing level three times, and writes one CSV row per
+level. The run's rows are deleted between levels, so every window starts from the same empty account.
 
-The question, the phases, the gates and the decisions are in `SRE-LOADTESTING.md`, the experiment's design doc,
-which lives outside this repo. Code comments defer to it. This file owns how to run.
+## Layout
+
+| File           | What                                        |
+| -------------- | ------------------------------------------- |
+| `main.js`      | the workload, its checks and its thresholds |
+| `sweep.py`     | the ladder driver                           |
+| `flake.nix`    | k6 and python3 on PATH                      |
+| `.env.example` | every value either entry point reads        |
 
 ## Requirements
 
-- k6 on PATH (`--k6` overrides the binary).
-- A target that can take load without auth, vendor cost or a rate limit. `setup()` refuses to start
-  unless the identity it reads is on the tier and the model the experiment expects.
-- A sweep identity of its own, passed as `--sweep-sub`, so the rows the cleanup deletes are known to be
-  the run's. Set the target's `DEV_USER_SUB` to that same value, or the sweep spends your own dev
-  account's rows and daily turn counter instead of its own.
+- k6 and python3 on PATH, or `nix develop`, which puts both there.
+- A target that takes load without auth, vendor cost or a rate limit. `main.js` refuses to start
+  otherwise, before the loop sends anything.
+- An identity of its own for the sweep account, so the cleanup deletes only the run's rows. On the
+  target that is its dev or test identity; here it is `--sweep-sub` or `SWEEP_SUB`.
 
 ## Configure
 
-Copy `.env.example` to `.env` and fill it in. Both entry points read it, and a value exported in the
-shell wins over the file. k6 resolves the path against the directory you run from, so run from the
-repo root.
+Copy `.env.example` to `.env` and fill it in. A value exported in the shell wins over the file, and
+`--api-url` wins over both. k6 resolves `.env` against the directory you run from, so run from the repo
+root. The template carries every value and what it does.
 
 ## Run
 
-The sweep runs against the perf window, which is a gitops edit: swap
-`apps/maxterview/overlays/prod` for `apps/maxterview/overlays/perf` in `apps-of-apps/maxterview.yaml`,
-wait for the sync, and confirm the pod answers `tier=dev` before any load. `setup()` refuses to start
-otherwise, so a window that never opened cannot be measured by accident. Swap the path back when the
-ladder stops: the window turns Clerk and the app's rate limit off, and it must not outlive the run.
-
 ```sh
-k6 run main.js
-python3 sweep.py --sweep-sub <account-id>
+nix develop
+k6 run main.js                                          # one level, TARGET_VUS users
+python3 sweep.py --sweep-sub <id>                       # the ladder, with cleanup between levels
+python3 sweep.py --sweep-sub <id> --only 10 --smoke     # one short level, for a harness check
+python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows, load nothing
 ```
-
-Without k6 installed, `nix shell nixpkgs#k6 -c python3 sweep.py --sweep-sub <account-id>` runs the same
-driver, and `nix run nixpkgs#k6 -- run main.js` the workload on its own.
 
 `python3 sweep.py --help` lists the flags.
 
 ## Output
 
-`results/sweep-<utc>.csv`, one row per level, and `results/level-<n>.json`, the k6 summary each row is
-read from. Both stay out of git.
+`results/sweep-<utc>.csv`, one row per level: p50, p95, p99, error rate, iterations, requests, seconds
+and the account's row count before and after the window. `results/level-<n>.json` is the k6 summary each
+row is read from. Both stay out of git.
