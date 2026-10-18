@@ -192,7 +192,7 @@ def pick_metric(metrics, name, tags=("phase:measure",)):
 def main():
     parser = argparse.ArgumentParser(description="k6 sweep ladder driver")
     parser.add_argument("--api-url", default="", help="e.g. https://host/api; API_URL from .env when unset")
-    parser.add_argument("--sweep-sub", required=True, help="the sweep owner_id every listed row must have")
+    parser.add_argument("--sweep-sub", default="", help="the sweep owner_id every listed row must have; SWEEP_SUB from .env when unset")
     parser.add_argument("--k6", default="k6")
     parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
     parser.add_argument("--smoke", action="store_true", help="shorten the phases for a harness check")
@@ -202,6 +202,7 @@ def main():
     args = parser.parse_args()
 
     args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
+    args.sweep_sub = args.sweep_sub or cfg("SWEEP_SUB")
     if not args.api_url:
         sys.exit("ABORT: --api-url or API_URL in .env is required")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -210,7 +211,7 @@ def main():
     # Only the cleanup path needs a real identity; with --no-cleanup nothing is deleted, so a harness
     # check may run as dev-user.
     if (not args.sweep_sub or args.sweep_sub == "dev-user") and not args.no_cleanup:
-        sys.exit("ABORT: --sweep-sub must name the sweep identity (DEV_USER_SUB), not dev-user")
+        sys.exit("ABORT: --sweep-sub or SWEEP_SUB must name the sweep identity (DEV_USER_SUB), not dev-user")
 
     if args.cleanup_only:
         cleanup(args.api_url, args.sweep_sub)
