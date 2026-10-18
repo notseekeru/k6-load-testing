@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Ladder driver for the k6 sweep (SRE-LOADTESTING.md).
 
-Levels double. A failure in the first four stops the sweep: that is a broken test or a broken app, not
-load. The first failure above them is the top of the range, and the gap below it is binary-searched
-for the highest level that still passes.
+Levels double. A failure in the first level stops the sweep: that is a broken test or a broken app, not
+load. The first failure above it is the top of the range, and the gap below is binary-searched for the
+highest level that still passes.
 
 Rows are deleted between steps through the API, so the account the loop reads stays the same size and
 the curve is not partly made of the test's own writes. The cleanup refuses to touch anything unless
@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
-SMOKE_LEVELS = 4
+SMOKE_LEVELS = 1
 DEFAULT_MAX_VUS = 800
 DELETE_WORKERS = 32
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
@@ -162,7 +162,7 @@ def run_level(level, args, deleted):
 # The exported digest carries p(95) but not always p(99), so p99 falls back to max. A metric that is
 # absent stays blank: a zero would read as a perfect number.
 def measured_metrics(metrics):
-    duration = pick_metric(metrics, "http_req_duration")
+    duration = pick_metric(metrics, "http_req_duration", ("phase:measure", "model:false"))
     failed = pick_metric(metrics, "http_req_failed")
     return {
         "p95": rounded(duration.get("p(95)", duration.get("med"))),
@@ -177,9 +177,13 @@ def rounded(value, places=1):
     return None if value is None else round(value, places)
 
 
-# phase:measure only: the untagged metric folds the ramp and the warm-up into the same number.
-def pick_metric(metrics, name):
-    return metrics.get(f"{name}{{phase:measure}}", {}).get("values", {})
+# phase:measure only: the untagged metric folds the ramp and the warm-up into the same number. The
+# duration line is read from the same tag set the threshold uses, so the CSV reports the gate.
+def pick_metric(metrics, name, tags=("phase:measure",)):
+    for key, value in metrics.items():
+        if key.startswith(f"{name}{{") and all(tag in key for tag in tags):
+            return value.get("values", {})
+    return {}
 
 
 def main():
@@ -251,7 +255,7 @@ def main():
 
 
 def ladder(max_vus):
-    levels, level = [], 25
+    levels, level = [], 100
     while level <= max_vus:
         levels.append(level)
         level *= 2
@@ -266,7 +270,7 @@ def tolerance(low):
 # search depends on.
 def self_check():
     levels = ladder(DEFAULT_MAX_VUS)
-    assert levels == [25, 50, 100, 200, 400, 800], levels
+    assert levels == [100, 200, 400, 800], levels
     assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
 
 

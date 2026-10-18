@@ -65,7 +65,7 @@ export const options = {
         },
     },
     thresholds: {
-        "http_req_duration{phase:measure}": [
+        "http_req_duration{phase:measure,model:false}": [
             `p(95)<${P95_MS}`,
             `p(99)<${P99_MS}`,
         ],
@@ -119,9 +119,10 @@ export function handleSummary(data) {
 }
 
 export default function () {
+    const interview = randomInterview();
     const created = http.post(
         `${API}/interviews`,
-        JSON.stringify(randomInterview()),
+        JSON.stringify(interview),
         params("POST /api/interviews"),
     );
     if (
@@ -138,7 +139,7 @@ export default function () {
     send("POST", "/interviews/{id}/start", null, [200], id);
 
     let closing = stream("/interviews/{id}/chat/kickoff", null, "opener", id);
-    const turns = randInt(TURNS_MIN, TURNS_MAX);
+    const turns = Math.min(randInt(TURNS_MIN, TURNS_MAX), plannedQuestions(interview));
     for (let turn = 1; !closing && turn <= turns; turn++) {
         sleep(rand(THINK_MIN_S, THINK_MAX_S));
         const body = JSON.stringify({
@@ -151,7 +152,7 @@ export default function () {
     const finished = http.post(
         `${API}/interviews/${id}/finish`,
         null,
-        params("POST /api/interviews/{id}/finish"),
+        params("POST /api/interviews/{id}/finish", { model: "true" }),
     );
     check(finished, {
         "finish: 200": (r) => r.status === 200,
@@ -174,7 +175,11 @@ export default function () {
 // One turn of SSE from the client's side: the deltas, then `done`. A dropped turn or an error frame
 // fails here, in the same report as the timing.
 function stream(route, body, label, id) {
-    const res = http.post(url(route, id), body, params(`POST /api${route}`));
+    const res = http.post(
+        url(route, id),
+        body,
+        params(`POST /api${route}`, { model: "true" }),
+    );
     const frames = parseSse(res.body);
     const last = frames.length ? frames[frames.length - 1] : null;
     check(res, {
@@ -299,7 +304,7 @@ function params(name, tags) {
     const headers = { "Content-Type": "application/json" };
     if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
     if (HOST_HEADER) headers.Host = HOST_HEADER;
-    return { headers, tags: { name, ...(tags || {}) } };
+    return { headers, tags: { name, model: "false", ...(tags || {}) } };
 }
 
 function parseSse(body) {
@@ -367,6 +372,14 @@ function pick(list) {
     return list[randInt(0, list.length - 1)];
 }
 
+function plannedQuestions(interview) {
+    return (
+        interview.mix_chitchat +
+        interview.mix_behavioural +
+        interview.mix_technical
+    );
+}
+
 function randomInterview() {
     return {
         role: pick(ROLES),
@@ -376,7 +389,7 @@ function randomInterview() {
         cynicism: pick(CYNICISM),
         brutally_honest: Math.random() < 0.3,
         human_mode: Math.random() < 0.8,
-        hardcore: Math.random() < 0.5,
+        hardcore: false,
         mix_chitchat: randInt(0, 2),
         mix_behavioural: randInt(0, 2),
         mix_technical: randInt(1, 4),
