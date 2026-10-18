@@ -13,7 +13,8 @@ which lives outside this repo. Code comments defer to it. This file owns how to 
 - A target that can take load without auth, vendor cost or a rate limit. `setup()` refuses to start
   unless the identity it reads is on the tier and the model the experiment expects.
 - A sweep identity of its own, passed as `--sweep-sub`, so the rows the cleanup deletes are known to be
-  the run's.
+  the run's. Set the target's `DEV_USER_SUB` to that same value, or the sweep spends your own dev
+  account's rows and daily turn counter instead of its own.
 
 ## Configure
 
@@ -33,6 +34,9 @@ ladder stops: the window turns Clerk and the app's rate limit off, and it must n
 k6 run main.js
 python3 sweep.py --sweep-sub <account-id>
 ```
+
+Without k6 installed, `nix shell nixpkgs#k6 -c python3 sweep.py --sweep-sub <account-id>` runs the same
+driver, and `nix run nixpkgs#k6 -- run main.js` the workload on its own.
 
 `python3 sweep.py --help` lists the flags.
 
