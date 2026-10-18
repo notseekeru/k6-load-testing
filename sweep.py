@@ -151,6 +151,7 @@ def run_level(level, args, deleted):
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "vus": int(level),
         "verdict": "pass" if passed else "fail",
+        "p50_ms": measured.get("p50"),
         "p95_ms": measured.get("p95"),
         "p99_ms": measured.get("p99"),
         "err_rate": measured.get("err_rate"),
@@ -167,6 +168,7 @@ def measured_metrics(metrics):
     duration = pick_metric(metrics, "http_req_duration", ("phase:measure", "model:false"))
     failed = pick_metric(metrics, "http_req_failed")
     return {
+        "p50": rounded(duration.get("med")),
         "p95": rounded(duration.get("p(95)", duration.get("med"))),
         "p99": rounded(duration.get("p(99)", duration.get("max"))),
         "err_rate": rounded(failed.get("rate"), 5),
