@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 SMOKE_LEVELS = 1
+CONFIRM_RUNS = 3
+GAP_S = 15
 DEFAULT_MAX_VUS = 800
 DELETE_WORKERS = 32
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
@@ -177,8 +179,7 @@ def rounded(value, places=1):
     return None if value is None else round(value, places)
 
 
-# phase:measure only: the untagged metric folds the ramp and the warm-up into the same number. The
-# duration line is read from the same tag set the threshold uses, so the CSV reports the gate.
+# phase:measure only: the untagged metric folds the ramp and the warm-up into the same number.
 def pick_metric(metrics, name, tags=("phase:measure",)):
     for key, value in metrics.items():
         if key.startswith(f"{name}{{") and all(tag in key for tag in tags):
@@ -226,7 +227,7 @@ def main():
     first_fail = None
 
     for index, vus in enumerate(levels):
-        row = run_step(csv_path, vus, args)
+        row = run_step(csv_path, vus, args, between=index > 0)
         print(f"{vus} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
@@ -244,7 +245,7 @@ def main():
     gap = tolerance(low)
     while high - low > gap:
         mid = (low + high) // 2
-        row = run_step(csv_path, mid, args)
+        row = run_step(csv_path, mid, args, between=True)
         print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
         if row["verdict"] == "pass":
             low = mid
@@ -252,6 +253,13 @@ def main():
             high = mid
 
     print(f"boundary: {low} VUs pass, {high} VUs fail (gap under {gap}); csv {csv_path}")
+
+    passed = 0
+    for run in range(CONFIRM_RUNS):
+        row = run_step(csv_path, low, args, between=True)
+        passed += row["verdict"] == "pass"
+        print(f"{low} VUs (confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
+    print(f"confirmed {low} VUs: {passed}/{CONFIRM_RUNS} passed")
 
 
 def ladder(max_vus):
@@ -272,14 +280,30 @@ def self_check():
     levels = ladder(DEFAULT_MAX_VUS)
     assert levels == [100, 200, 400, 800], levels
     assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
+    assert GAP_S * 2 + 30 <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
 
 
-def run_one(vus, args):
-    return run_level(vus, args, 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub))
+def account_size(api_url):
+    try:
+        _, interviews = call("GET", f"{api_url}/interviews")
+        return len(interviews or [])
+    except Exception:
+        return None
 
 
-def run_step(csv_path, vus, args):
-    row = run_one(vus, args)
+def run_one(vus, args, between=False):
+    if between:
+        time.sleep(GAP_S)
+    deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
+    if between:
+        time.sleep(GAP_S)
+    row = run_level(vus, args, deleted)
+    row["rows_after"] = account_size(args.api_url)
+    return row
+
+
+def run_step(csv_path, vus, args, between=False):
+    row = run_one(vus, args, between)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())
         if handle.tell() == 0:
