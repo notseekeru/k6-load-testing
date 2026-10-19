@@ -22,13 +22,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from pathlib import Path
 
 SMOKE_LEVELS = 1
 CONFIRM_RUNS = 3
 GAP_S = 15
+CLEANUP_BUDGET_S = 30
 DEFAULT_MAX_VUS = 800
 DELETE_WORKERS = 32
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
@@ -101,14 +102,24 @@ def cleanup(api_url, sweep_sub):
         except Exception:
             return -1
 
-    with ThreadPoolExecutor(max_workers=DELETE_WORKERS) as pool:
-        for result in pool.map(drop, [row["id"] for row in interviews]):
+    started = time.monotonic()
+    pool = ThreadPoolExecutor(max_workers=DELETE_WORKERS)
+    try:
+        pending = {pool.submit(drop, row["id"]) for row in interviews}
+        done, pending = wait(pending, timeout=CLEANUP_BUDGET_S)
+        for future in done:
+            result = future.result()
             if result == 1:
                 deleted += 1
             elif result == -1:
                 failed += 1
-    print(f"cleanup: {deleted} deleted, {failed} failed, owner={sweep_sub}")
-    if failed:
+        for future in pending:
+            future.cancel()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    elapsed = time.monotonic() - started
+    print(f"cleanup: {deleted} deleted, {failed} failed, {len(pending)} left behind, {elapsed:.1f}s of {CLEANUP_BUDGET_S}s, owner={sweep_sub}")
+    if failed or pending:
         sys.exit("ABORT: cleanup left rows behind, the next step would read a bigger account than the last")
     return deleted
 
@@ -283,7 +294,7 @@ def self_check():
     levels = ladder(DEFAULT_MAX_VUS)
     assert levels == [100, 200, 400, 800], levels
     assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
-    assert GAP_S * 2 + 30 <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
+    assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
 
 
 def account_size(api_url):
