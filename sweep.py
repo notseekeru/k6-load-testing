@@ -30,6 +30,7 @@ SMOKE_LEVELS = 1
 CONFIRM_RUNS = 3
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
+DEFAULT_START = 100
 DEFAULT_MAX_VUS = 800
 DELETE_WORKERS = 32
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
@@ -139,13 +140,16 @@ def run_level(level, args, deleted):
         env.update(RAMP_S="3", WARM_S="3", MEASURE_S="10")
 
     started = time.time()
-    completed = subprocess.run(
-        [args.k6, "run", str(Path(__file__).with_name("main.js"))],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=LEVEL_TIMEOUT_S,
-    )
+    try:
+        completed = subprocess.run(
+            [args.k6, "run", str(Path(__file__).with_name("main.js"))],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=LEVEL_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        sys.exit(f"ABORT: cannot run '{args.k6}'. Install k6, or run inside 'nix develop' or direnv.")
     elapsed = time.time() - started
 
     if completed.returncode not in (0, 99):
@@ -205,6 +209,7 @@ def main():
     parser.add_argument("--api-url", default="", help="e.g. https://host/api; API_URL from .env when unset")
     parser.add_argument("--sweep-sub", default="", help="the sweep owner_id every listed row must have; SWEEP_SUB from .env when unset")
     parser.add_argument("--k6", default="k6")
+    parser.add_argument("--start", type=int, default=DEFAULT_START, help="first rung of the ladder, doubling from there")
     parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
     parser.add_argument("--smoke", action="store_true", help="shorten the phases for a harness check")
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between steps (do not)")
@@ -218,6 +223,9 @@ def main():
         sys.exit("ABORT: --api-url or API_URL in .env is required")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     self_check()
+    csv_path = RESULTS_DIR / f"sweep-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
+    if args.start < 1:
+        sys.exit("ABORT: --start must be at least 1, or the ladder never advances")
 
     # Only the cleanup path needs a real identity; with --no-cleanup nothing is deleted, so a harness
     # check may run as dev-user.
@@ -229,12 +237,13 @@ def main():
         return
 
     if args.only:
-        rows = run_one(args.only, args)
-        print(f"{args.only} VUs: {rows['verdict']} p95={rows['p95_ms']}ms p99={rows['p99_ms']}ms err={rows['err_rate']}")
+        row = run_step(csv_path, args.only, args)
+        print(f"{args.only} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}; csv {csv_path}")
         return
 
-    levels = ladder(args.max_vus)
-    csv_path = RESULTS_DIR / f"sweep-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
+    levels = ladder(args.start, args.max_vus)
+    if not levels:
+        sys.exit(f"ABORT: --start {args.start} is above --max-vus {args.max_vus}, so the ladder is empty")
     print(f"ladder: {levels} (max {args.max_vus}), csv {csv_path}")
 
     last_pass = 0
@@ -276,8 +285,8 @@ def main():
     print(f"confirmed {low} VUs: {passed}/{CONFIRM_RUNS} passed")
 
 
-def ladder(max_vus):
-    levels, level = [], 100
+def ladder(start, max_vus):
+    levels, level = [], start
     while level <= max_vus:
         levels.append(level)
         level *= 2
@@ -291,8 +300,9 @@ def tolerance(low):
 # Framework-free and run before any request leaves the box: the ladder and the tolerance are what the
 # search depends on.
 def self_check():
-    levels = ladder(DEFAULT_MAX_VUS)
+    levels = ladder(DEFAULT_START, DEFAULT_MAX_VUS)
     assert levels == [100, 200, 400, 800], levels
+    assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
     assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
 
