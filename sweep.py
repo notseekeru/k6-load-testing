@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from pathlib import Path
 
-SMOKE_LEVELS = 1
+SMOKE_VUS = 10
 CONFIRM_RUNS = 3
 CONFIRM_ROUNDS = 3
 CONFIRM_MEASURE_S = 300
@@ -140,7 +140,7 @@ def cleanup(api_url, sweep_sub):
     return deleted
 
 
-def run_level(level, args, deleted, measure_s=None, phase="ladder"):
+def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False):
     # One file per run, so the three confirmations at one level do not overwrite each other.
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     summary_path = RESULTS_DIR / f"level-{int(level)}-{phase}-{stamp}.json"
@@ -151,7 +151,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder"):
         "TARGET_VUS": str(int(level)),
         "SUMMARY_PATH": str(summary_path),
     }
-    if args.smoke:
+    if args.smoke or smoke:
         env.update(RAMP_S="3", WARM_S="3", MEASURE_S="10")
     if measure_s:
         env["MEASURE_S"] = str(int(measure_s))
@@ -236,11 +236,10 @@ def main():
     parser.add_argument("--k6", default="k6")
     parser.add_argument("--start", type=int, default=DEFAULT_START, help="first rung of the ladder, doubling from there")
     parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
-    parser.add_argument("--smoke", action="store_true", help="shorten the phases for a harness check")
+    parser.add_argument("--smoke", action="store_true", help="shorten the phases, for --only")
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between steps (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--only", type=int, help="run one level and stop")
-    parser.add_argument("--no-first-rung-abort", action="store_true", help="search instead of aborting when the first rung fails, for a run that starts low on purpose")
     args = parser.parse_args()
 
     args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
@@ -262,11 +261,16 @@ def main():
         cleanup(args.api_url, args.sweep_sub)
         return
 
+    if args.smoke and not args.only:
+        sys.exit(f"ABORT: --smoke shortens every window; it is for --only. The sweep opens with its own {SMOKE_VUS} VU smoke.")
+
     if args.only:
         row = run_step(csv_path, args.only, args, phase="only")
         print(f"{args.only} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}; csv {csv_path}")
         return
 
+    if args.start <= SMOKE_VUS:
+        sys.exit(f"ABORT: --start must be above the {SMOKE_VUS} VU smoke, or the ladder cannot bracket it")
     levels = ladder(args.start, args.max_vus)
     if not levels:
         sys.exit(f"ABORT: --start {args.start} is above --max-vus {args.max_vus}, so the ladder is empty")
@@ -275,25 +279,24 @@ def main():
 
 
 def run_sweep(csv_path, args, levels):
-    last_pass = 0
-    first_fail = None
-    passes = set()
+    smoke = run_step(csv_path, SMOKE_VUS, args, phase="smoke", smoke=True)
+    print(f"{SMOKE_VUS} VUs smoke: {smoke['verdict']} p95={ms(smoke['p95_ms'])} err={smoke['err_rate']}")
+    if smoke["verdict"] != "pass":
+        sys.exit(f"ABORT: the {SMOKE_VUS} VU smoke failed. The harness or the app is broken before any load: fix it, then run again.")
 
-    for index, vus in enumerate(levels):
-        row = run_step(csv_path, vus, args, between=index > 0, phase="ladder")
+    last_pass = SMOKE_VUS
+    first_fail = None
+    passes = {SMOKE_VUS}
+
+    for vus in levels:
+        row = run_step(csv_path, vus, args, between=True, phase="ladder")
         print(f"{vus} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
             passes.add(vus)
             continue
-        if index < SMOKE_LEVELS and not args.no_first_rung_abort:
-            sys.exit(f"ABORT: {vus} VUs failed on the first rung. Either the boundary is below it or something is broken: rerun lower (--only 10) to tell which.")
         first_fail = vus
         break
-
-    if first_fail is not None and not last_pass:
-        print(f"{first_fail} VUs failed with no passing rung below it; lower --start")
-        return None
 
     if first_fail is None:
         print(f"no failure up to {last_pass} VUs; raise --max-vus")
@@ -357,7 +360,7 @@ def self_check():
     levels = ladder(DEFAULT_START, DEFAULT_MAX_VUS)
     assert levels == [100, 200, 400, 800], levels
     assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
-    assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
+    assert tolerance(SMOKE_VUS) < DEFAULT_START - SMOKE_VUS, "the search needs room between the smoke and the first rung"
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
     assert CONFIRM_ROUNDS >= 1, "a sweep with no confirmation phase never proves the boundary"
 
@@ -369,19 +372,19 @@ def account_size(api_url):
         return None
 
 
-def run_one(vus, args, between=False, measure_s=None, phase="ladder"):
+def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False):
     if between:
         time.sleep(GAP_S)
     deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
     if between:
         time.sleep(GAP_S)
-    row = run_level(vus, args, deleted, measure_s, phase)
+    row = run_level(vus, args, deleted, measure_s, phase, smoke)
     row["rows_after"] = account_size(args.api_url)
     return row
 
 
-def run_step(csv_path, vus, args, between=False, measure_s=None, phase="ladder"):
-    row = run_one(vus, args, between, measure_s, phase)
+def run_step(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False):
+    row = run_one(vus, args, between, measure_s, phase, smoke)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())
         if handle.tell() == 0:

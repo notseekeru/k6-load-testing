@@ -2,11 +2,12 @@
 
 One virtual user walks the whole surface: it creates a run, starts it, opens it, answers turn by turn
 over SSE, finishes it, reads the review, then works through the read endpoints. `sweep.py` drives that
-workload as a ladder: it climbs from the first level, brackets the first level that fails, binary
-searches the gap below it, then re-runs the highest passing level three times and requires all three to
-pass. A failing confirmation ends that phase and reopens the search below the level, at most three
-phases. One CSV row per window. The run's rows are deleted between levels, so every window starts from
-the same empty account.
+workload as a sweep: a mandatory 10 VU smoke first, which aborts the run if it fails, then a ladder from
+100 VUs that doubles, brackets the first level that fails, binary searches the gap below it down to the
+smoke's 10 VUs, then re-runs the highest passing level three times and requires all three to pass. A
+failing confirmation ends that phase and reopens the search below the level, at most three phases. One
+CSV row per window, tagged `smoke`, `ladder`, `search` or `confirm`. The run's rows are deleted between
+levels, so every window starts from the same empty account.
 
 ## Layout
 
@@ -36,8 +37,8 @@ root. The template carries every value and what it does.
 ```sh
 nix develop
 k6 run main.js                                          # one level, TARGET_VUS users
-python3 sweep.py --sweep-sub <id>                       # the ladder, with cleanup between levels
-python3 sweep.py --sweep-sub <id> --only 10 --smoke     # one short level, for a harness check
+python3 sweep.py --sweep-sub <id>                       # smoke, then the ladder, cleanup between windows
+python3 sweep.py --sweep-sub <id> --only 10 --smoke     # that same smoke, without the ladder
 python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows, load nothing
 ```
 
