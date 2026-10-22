@@ -28,6 +28,7 @@ from pathlib import Path
 
 SMOKE_LEVELS = 1
 CONFIRM_RUNS = 3
+CONFIRM_MEASURE_S = 300
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
 DEFAULT_START = 100
@@ -125,7 +126,7 @@ def cleanup(api_url, sweep_sub):
     return deleted
 
 
-def run_level(level, args, deleted):
+def run_level(level, args, deleted, measure_s=None):
     summary_path = RESULTS_DIR / f"level-{int(level)}.json"
     # Left over from an earlier run of this level, it would be read as this run's numbers.
     summary_path.unlink(missing_ok=True)
@@ -138,6 +139,8 @@ def run_level(level, args, deleted):
     }
     if args.smoke:
         env.update(RAMP_S="3", WARM_S="3", MEASURE_S="10")
+    if measure_s:
+        env["MEASURE_S"] = str(int(measure_s))
 
     started = time.time()
     try:
@@ -280,7 +283,7 @@ def main():
 
     passed = 0
     for run in range(CONFIRM_RUNS):
-        row = run_step(csv_path, low, args, between=True)
+        row = run_step(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S)
         passed += row["verdict"] == "pass"
         print(f"{low} VUs (confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
     print(f"confirmed {low} VUs: {passed}/{CONFIRM_RUNS} passed")
@@ -316,19 +319,19 @@ def account_size(api_url):
         return None
 
 
-def run_one(vus, args, between=False):
+def run_one(vus, args, between=False, measure_s=None):
     if between:
         time.sleep(GAP_S)
     deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
     if between:
         time.sleep(GAP_S)
-    row = run_level(vus, args, deleted)
+    row = run_level(vus, args, deleted, measure_s)
     row["rows_after"] = account_size(args.api_url)
     return row
 
 
-def run_step(csv_path, vus, args, between=False):
-    row = run_one(vus, args, between)
+def run_step(csv_path, vus, args, between=False, measure_s=None):
+    row = run_one(vus, args, between, measure_s)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())
         if handle.tell() == 0:
