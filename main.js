@@ -2,7 +2,9 @@
 // change to any of those belongs there first. Runbook and env: README.
 
 import { check, fail, sleep } from "k6";
+import exec from "k6/execution";
 import http from "k6/http";
+import { Counter } from "k6/metrics";
 
 // .env beside the script, read once at init. AI HERE: KEY=value only, no export prefix, quotes or
 // interpolation. k6 resolves the path against the run directory, not this file.
@@ -42,6 +44,10 @@ const MEASURE_S = num("MEASURE_S", 300);
 // SRE-LOADTESTING.md's gates, held here so k6 can enforce them.
 const P95_MS = 1000;
 const P99_MS = 5000;
+
+// AI HERE: counted here because a tagged submetric only exists for a thresholded tag set, and phases by
+// scenario name, so a second measure-phase scenario has to match.
+const MEASURE_REQS = new Counter("measure_requests");
 
 export const options = {
     scenarios: {
@@ -113,9 +119,11 @@ export function setup() {
 
 // Written where the driver points it: the summary format then does not depend on a k6 CLI flag.
 export function handleSummary(data) {
-    return __ENV.SUMMARY_PATH
-        ? { [__ENV.SUMMARY_PATH]: JSON.stringify(data) }
-        : {};
+    if (!__ENV.SUMMARY_PATH) return {};
+    const counted = data.metrics.measure_requests?.values?.count;
+    if (!counted) console.warn("measure: no requests counted, rps stays blank");
+    const rps = counted ? +(counted / MEASURE_S).toFixed(1) : null;
+    return { [__ENV.SUMMARY_PATH]: JSON.stringify({ ...data, rps }) };
 }
 
 export default function () {
@@ -304,6 +312,9 @@ function params(name, tags) {
     const headers = { "Content-Type": "application/json" };
     if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
     if (HOST_HEADER) headers.Host = HOST_HEADER;
+    try {
+        if (exec.scenario.name === "measure") MEASURE_REQS.add(1);
+    } catch (e) {}
     return { headers, tags: { name, model: "false", ...(tags || {}) } };
 }
 

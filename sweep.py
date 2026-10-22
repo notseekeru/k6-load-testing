@@ -172,6 +172,7 @@ def run_level(level, args, deleted):
         "err_rate": measured.get("err_rate"),
         "iterations": measured.get("iterations"),
         "http_reqs": measured.get("http_reqs"),
+        "rps": summary.get("rps"),
         "seconds": round(elapsed, 1),
         "deleted_before": deleted,
     }
