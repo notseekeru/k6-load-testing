@@ -77,12 +77,25 @@ def call(method, url, body=None, timeout=120):
         return response.status, (json.loads(raw) if raw else None)
 
 
+def all_interviews(api_url):
+    rows, offset, limit = [], 0, 200
+    while True:
+        _, page = call("GET", f"{api_url}/interviews?limit={limit}&offset={offset}")
+        page = page or []
+        # A short page is the last one. A long one means the target ignores limit/offset, so it is
+        # also the last one.
+        if len(page) != limit:
+            return rows + page
+        rows.extend(page)
+        offset += limit
+
+
 # The sweep identity is decision 10 in SRE.md: its own rows, its own turn counter, so a delete set
 # is known to be the run's. Any foreign owner here means the identity is wrong and the abort is the
 # only safe move: this deletes prod's rows.
 def cleanup(api_url, sweep_sub):
     try:
-        _, interviews = call("GET", f"{api_url}/interviews")
+        interviews = all_interviews(api_url)
     except Exception as exc:
         sys.exit(f"ABORT: cannot list interviews at {api_url}: {exc}. Nothing to delete, nothing to load.")
     interviews = interviews or []
@@ -351,8 +364,7 @@ def self_check():
 
 def account_size(api_url):
     try:
-        _, interviews = call("GET", f"{api_url}/interviews")
-        return len(interviews or [])
+        return len(all_interviews(api_url))
     except Exception:
         return None
 
