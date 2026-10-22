@@ -70,6 +70,7 @@ export const options = {
             gracefulStop: "120s",
         },
     },
+    summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
     thresholds: {
         "http_req_duration{phase:measure,model:false}": [
             `p(95)<${P95_MS}`,

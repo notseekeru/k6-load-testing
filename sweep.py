@@ -128,9 +128,9 @@ def cleanup(api_url, sweep_sub):
 
 
 def run_level(level, args, deleted, measure_s=None, phase="ladder"):
-    summary_path = RESULTS_DIR / f"level-{int(level)}.json"
-    # Left over from an earlier run of this level, it would be read as this run's numbers.
-    summary_path.unlink(missing_ok=True)
+    # One file per run, so the three confirmations at one level do not overwrite each other.
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    summary_path = RESULTS_DIR / f"level-{int(level)}-{phase}-{stamp}.json"
     env = {
         **DOTENV,
         **os.environ,
