@@ -184,15 +184,14 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder"):
     }
 
 
-# The exported digest carries p(95) but not always p(99), so p99 falls back to max. A metric that is
-# absent stays blank: a zero would read as a perfect number.
+# A metric that is absent stays blank: a zero would read as a perfect number.
 def measured_metrics(metrics):
     duration = pick_metric(metrics, "http_req_duration", ("phase:measure", "model:false"))
     failed = pick_metric(metrics, "http_req_failed")
     return {
         "p50": rounded(duration.get("med")),
-        "p95": rounded(duration.get("p(95)", duration.get("med"))),
-        "p99": rounded(duration.get("p(99)", duration.get("max"))),
+        "p95": rounded(duration.get("p(95)")),
+        "p99": rounded(duration.get("p(99)")),
         "err_rate": rounded(failed.get("rate"), 5),
         "iterations": int(metrics.get("iterations", {}).get("values", {}).get("count", 0)),
         "http_reqs": int(metrics.get("http_reqs", {}).get("values", {}).get("count", 0)),
@@ -201,6 +200,10 @@ def measured_metrics(metrics):
 
 def rounded(value, places=1):
     return None if value is None else round(value, places)
+
+
+def ms(value):
+    return "n/a" if value is None else f"{value}ms"
 
 
 # phase:measure only: the untagged metric folds the ramp and the warm-up into the same number.
@@ -246,7 +249,7 @@ def main():
 
     if args.only:
         row = run_step(csv_path, args.only, args, phase="only")
-        print(f"{args.only} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}; csv {csv_path}")
+        print(f"{args.only} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}; csv {csv_path}")
         return
 
     levels = ladder(args.start, args.max_vus)
@@ -263,7 +266,7 @@ def run_sweep(csv_path, args, levels):
 
     for index, vus in enumerate(levels):
         row = run_step(csv_path, vus, args, between=index > 0, phase="ladder")
-        print(f"{vus} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}")
+        print(f"{vus} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
             passes.add(vus)
