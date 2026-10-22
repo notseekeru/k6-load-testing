@@ -28,6 +28,7 @@ from pathlib import Path
 
 SMOKE_LEVELS = 1
 CONFIRM_RUNS = 3
+CONFIRM_ROUNDS = 3
 CONFIRM_MEASURE_S = 300
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
@@ -251,44 +252,68 @@ def main():
     if not levels:
         sys.exit(f"ABORT: --start {args.start} is above --max-vus {args.max_vus}, so the ladder is empty")
     print(f"ladder: {levels} (max {args.max_vus}), csv {csv_path}")
+    run_sweep(csv_path, args, levels)
 
+
+def run_sweep(csv_path, args, levels):
     last_pass = 0
     first_fail = None
+    passes = set()
 
     for index, vus in enumerate(levels):
         row = run_step(csv_path, vus, args, between=index > 0, phase="ladder")
         print(f"{vus} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
+            passes.add(vus)
             continue
         if index < SMOKE_LEVELS:
-            sys.exit(f"ABORT: {vus} VUs failed during the smoke checks. That is not a load problem: fix the test or the app.")
+            sys.exit(f"ABORT: {vus} VUs failed on the first rung. That is the harness or the app, not load: fix it, then run --only 10.")
         first_fail = vus
         break
 
     if first_fail is None:
         print(f"no failure up to {last_pass} VUs; raise --max-vus")
-        return
+        return None
 
-    low, high = last_pass, first_fail
-    gap = tolerance(low)
-    while high - low > gap:
+    low, high = search(csv_path, last_pass, first_fail, args, passes)
+    print(f"boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
+
+    for phase in range(1, CONFIRM_ROUNDS + 1):
+        for run in range(CONFIRM_RUNS):
+            row = run_step(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
+            print(f"{low} VUs (phase {phase}, confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
+            if row["verdict"] == "fail":
+                break
+        else:
+            print(f"confirmed {low} VUs: {CONFIRM_RUNS}/{CONFIRM_RUNS} in phase {phase}")
+            return low
+        if phase == CONFIRM_ROUNDS:
+            break
+        high = low
+        passes.discard(low)
+        lower = [v for v in passes if v < low]
+        if not lower:
+            print(f"{low} VUs failed confirmation with no passing rung below it; unconfirmed")
+            return None
+        low, high = search(csv_path, max(lower), high, args, passes)
+        print(f"new boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
+
+    print(f"unconfirmed after {CONFIRM_ROUNDS} confirmation phases: no level passed {CONFIRM_RUNS}/{CONFIRM_RUNS}")
+    return None
+
+
+def search(csv_path, low, high, args, passes):
+    while high - low > tolerance(low):
         mid = (low + high) // 2
         row = run_step(csv_path, mid, args, between=True, phase="search")
         print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
         if row["verdict"] == "pass":
             low = mid
+            passes.add(mid)
         else:
             high = mid
-
-    print(f"boundary: {low} VUs pass, {high} VUs fail (gap under {gap}); csv {csv_path}")
-
-    passed = 0
-    for run in range(CONFIRM_RUNS):
-        row = run_step(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
-        passed += row["verdict"] == "pass"
-        print(f"{low} VUs (confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
-    print(f"confirmed {low} VUs: {passed}/{CONFIRM_RUNS} passed")
+    return low, high
 
 
 def ladder(start, max_vus):
@@ -311,6 +336,7 @@ def self_check():
     assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
     assert tolerance(levels[SMOKE_LEVELS - 1]) < levels[SMOKE_LEVELS] - levels[SMOKE_LEVELS - 1]
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
+    assert CONFIRM_ROUNDS >= 1, "a sweep with no confirmation phase never proves the boundary"
 
 
 def account_size(api_url):

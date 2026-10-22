@@ -3,8 +3,10 @@
 One virtual user walks the whole surface: it creates a run, starts it, opens it, answers turn by turn
 over SSE, finishes it, reads the review, then works through the read endpoints. `sweep.py` drives that
 workload as a ladder: it climbs from the first level, brackets the first level that fails, binary
-searches the gap below it, re-runs the highest passing level three times, and writes one CSV row per
-level. The run's rows are deleted between levels, so every window starts from the same empty account.
+searches the gap below it, then re-runs the highest passing level three times and requires all three to
+pass. A failing confirmation ends that phase and reopens the search below the level, at most three
+phases. One CSV row per window. The run's rows are deleted between levels, so every window starts from
+the same empty account.
 
 ## Layout
 
