@@ -222,6 +222,7 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between steps (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--only", type=int, help="run one level and stop")
+    parser.add_argument("--no-first-rung-abort", action="store_true", help="search instead of aborting when the first rung fails, for a run that starts low on purpose")
     args = parser.parse_args()
 
     args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
@@ -267,10 +268,14 @@ def run_sweep(csv_path, args, levels):
             last_pass = vus
             passes.add(vus)
             continue
-        if index < SMOKE_LEVELS:
+        if index < SMOKE_LEVELS and not args.no_first_rung_abort:
             sys.exit(f"ABORT: {vus} VUs failed on the first rung. That is the harness or the app, not load: fix it, then run --only 10.")
         first_fail = vus
         break
+
+    if first_fail is not None and not last_pass:
+        print(f"{first_fail} VUs failed with no passing rung below it; lower --start")
+        return None
 
     if first_fail is None:
         print(f"no failure up to {last_pass} VUs; raise --max-vus")
