@@ -1,4 +1,4 @@
-// SRE-LOADTESTING.md owns the question, the workload, the phases and the gates; this file implements them, so a
+// SRE.md owns the question, the workload, the phases and the gates; this file implements them, so a
 // change to any of those belongs there first. Runbook and env: README.
 
 import { check, fail, sleep } from "k6";
@@ -41,7 +41,7 @@ const RAMP_S = num("RAMP_S", 30);
 const WARM_S = num("WARM_S", 60);
 const MEASURE_S = num("MEASURE_S", 180);
 
-// SRE-LOADTESTING.md's gates, held here so k6 can enforce them.
+// SRE.md's gates, held here so k6 can enforce them.
 const P95_MS = 1000;
 const P99_MS = 5000;
 
@@ -76,7 +76,7 @@ export const options = {
             `p(99)<${P99_MS}`,
         ],
         "http_req_failed{phase:measure}": ["rate<0.01"],
-        // Correctness is binary (SRE-LOADTESTING.md SLO). Rejected: rate>0.99, which passes while a bug bites only some
+        // Correctness is binary (SRE.md SLO). Rejected: rate>0.99, which passes while a bug bites only some
         // iterations.
         "checks{phase:measure}": ["rate==1"],
     },
@@ -225,7 +225,7 @@ function transcript(id) {
     });
 }
 
-// The rest of the signed-in surface (SRE-LOADTESTING.md decision 6). The two creates are kept off the app's caps by
+// The rest of the signed-in surface (SRE.md decision 6). The two creates are kept off the app's caps by
 // deleting what they made in the same iteration.
 //
 // AI HERE: at hundreds of VUs most creates land on the resume and template caps and are accepted as
