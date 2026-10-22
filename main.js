@@ -237,6 +237,7 @@ const READS = [
     "/interviews",
     "/stats/dimensions",
     "/stats/analytics",
+    "/stats/dashboard",
     "/usage",
     "/templates",
     "/resumes",
