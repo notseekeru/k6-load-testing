@@ -272,7 +272,7 @@ def run_sweep(csv_path, args, levels):
             passes.add(vus)
             continue
         if index < SMOKE_LEVELS and not args.no_first_rung_abort:
-            sys.exit(f"ABORT: {vus} VUs failed on the first rung. That is the harness or the app, not load: fix it, then run --only 10.")
+            sys.exit(f"ABORT: {vus} VUs failed on the first rung. Either the boundary is below it or something is broken: rerun lower (--only 10) to tell which.")
         first_fail = vus
         break
 
