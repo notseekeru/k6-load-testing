@@ -126,7 +126,7 @@ def cleanup(api_url, sweep_sub):
     return deleted
 
 
-def run_level(level, args, deleted, measure_s=None):
+def run_level(level, args, deleted, measure_s=None, phase="ladder"):
     summary_path = RESULTS_DIR / f"level-{int(level)}.json"
     # Left over from an earlier run of this level, it would be read as this run's numbers.
     summary_path.unlink(missing_ok=True)
@@ -167,7 +167,9 @@ def run_level(level, args, deleted, measure_s=None):
     measured = measured_metrics(metrics)
     return {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        "phase": phase,
         "vus": int(level),
+        "measure_s": int(env["MEASURE_S"]),
         "verdict": "pass" if passed else "fail",
         "p50_ms": measured.get("p50"),
         "p95_ms": measured.get("p95"),
@@ -241,7 +243,7 @@ def main():
         return
 
     if args.only:
-        row = run_step(csv_path, args.only, args)
+        row = run_step(csv_path, args.only, args, phase="only")
         print(f"{args.only} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}; csv {csv_path}")
         return
 
@@ -254,7 +256,7 @@ def main():
     first_fail = None
 
     for index, vus in enumerate(levels):
-        row = run_step(csv_path, vus, args, between=index > 0)
+        row = run_step(csv_path, vus, args, between=index > 0, phase="ladder")
         print(f"{vus} VUs: {row['verdict']} p95={row['p95_ms']}ms p99={row['p99_ms']}ms err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
@@ -272,7 +274,7 @@ def main():
     gap = tolerance(low)
     while high - low > gap:
         mid = (low + high) // 2
-        row = run_step(csv_path, mid, args, between=True)
+        row = run_step(csv_path, mid, args, between=True, phase="search")
         print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
         if row["verdict"] == "pass":
             low = mid
@@ -283,7 +285,7 @@ def main():
 
     passed = 0
     for run in range(CONFIRM_RUNS):
-        row = run_step(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S)
+        row = run_step(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
         passed += row["verdict"] == "pass"
         print(f"{low} VUs (confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
     print(f"confirmed {low} VUs: {passed}/{CONFIRM_RUNS} passed")
@@ -319,19 +321,19 @@ def account_size(api_url):
         return None
 
 
-def run_one(vus, args, between=False, measure_s=None):
+def run_one(vus, args, between=False, measure_s=None, phase="ladder"):
     if between:
         time.sleep(GAP_S)
     deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
     if between:
         time.sleep(GAP_S)
-    row = run_level(vus, args, deleted, measure_s)
+    row = run_level(vus, args, deleted, measure_s, phase)
     row["rows_after"] = account_size(args.api_url)
     return row
 
 
-def run_step(csv_path, vus, args, between=False, measure_s=None):
-    row = run_one(vus, args, between, measure_s)
+def run_step(csv_path, vus, args, between=False, measure_s=None, phase="ladder"):
+    row = run_one(vus, args, between, measure_s, phase)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())
         if handle.tell() == 0:
