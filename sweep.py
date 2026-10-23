@@ -142,8 +142,8 @@ def cleanup(api_url, sweep_sub):
 
 def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False):
     # One file per run, so the three confirmations at one level do not overwrite each other.
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    summary_path = RESULTS_DIR / f"level-{int(level)}-{phase}-{stamp}.json"
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    summary_path = RESULTS_DIR / f"level-{int(level)}-{phase}-{run_id}.json"
     env = {
         **DOTENV,
         **os.environ,
@@ -157,6 +157,9 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         env["MEASURE_S"] = str(int(measure_s))
 
     started = time.time()
+    window_start = datetime.fromtimestamp(
+        started + int(env.get("RAMP_S", 30)) + int(env.get("WARM_S", 60)), UTC
+    ).isoformat(timespec="seconds")
     try:
         completed = subprocess.run(
             [args.k6, "run", str(Path(__file__).with_name("main.js"))],
@@ -181,6 +184,9 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
     measured = measured_metrics(metrics)
     return {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        "run_id": run_id,
+        "label": args.label,
+        "measure_start": window_start,
         "phase": phase,
         "vus": int(level),
         "measure_s": int(env["MEASURE_S"]),
@@ -234,6 +240,7 @@ def main():
     parser.add_argument("--api-url", default="", help="e.g. https://host/api; API_URL from .env when unset")
     parser.add_argument("--sweep-sub", default="", help="the sweep owner_id every listed row must have; SWEEP_SUB from .env when unset")
     parser.add_argument("--k6", default="k6")
+    parser.add_argument("--label", default="", help="a short tag for the configuration under test, written to every row")
     parser.add_argument("--start", type=int, default=DEFAULT_START, help="first rung of the ladder, doubling from there")
     parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
     parser.add_argument("--smoke", action="store_true", help="shorten the phases, for --only")
@@ -244,6 +251,7 @@ def main():
 
     args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
     args.sweep_sub = args.sweep_sub or cfg("SWEEP_SUB")
+    args.label = args.label or cfg("LABEL")
     if not args.api_url:
         sys.exit("ABORT: --api-url or API_URL in .env is required")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)

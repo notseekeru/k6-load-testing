@@ -46,7 +46,11 @@ python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows,
 
 ## Output
 
-`results/sweep-<utc>.csv`, one row per window: its phase and window length, p50, p95, p99, max, error
+`results/sweep-<utc>.csv`, one row per window: its label, phase and window length, p50, p95, p99, max, error
 rate, iterations, requests, rps of the measurement window, seconds and the account's row count before
-and after the window.
-`results/level-<n>-<phase>-<utc>.json` is the k6 summary each row is read from, one file per run. Both stay out of git.
+and after the window. The label is `--label` or `LABEL`, so a file names the build, pool and path it
+measured.
+
+`run_id` is the same stamp as the run's `results/level-<n>-<phase>-<run_id>.json`, so a row finds its summary
+in one lookup. `measure_start` is the UTC start of the measurement window, so a row lines up with Grafana
+without knowing the phase lengths. Both results files stay out of git.
