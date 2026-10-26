@@ -48,8 +48,9 @@ python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows,
 
 `results/sweep-<utc>.csv`, one row per window: its label, phase and window length, p50, p95, p99, max, error
 rate, iterations, requests, rps of the measurement window, seconds and the account's row count before
-and after the window. The label is `--label` or `LABEL`, so a file names the build, pool and path it
-measured.
+and after the window. `pool_wait_*`, `query_*`, `pool_size_max` and `pool_idle_min` are read from
+Grafana's Prometheus over the same window; a read that fails stays blank with its reason in `db_note`.
+The label is `--label` or `LABEL`, so a file names the build, pool and path it measured.
 
 `run_id` is the same stamp as the run's `results/level-<n>-<phase>-<run_id>.json`, so a row finds its summary
 in one lookup. `measure_start` is the UTC start of the measurement window, so a row lines up with Grafana

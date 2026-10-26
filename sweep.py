@@ -10,17 +10,20 @@ the curve is not partly made of the test's own writes. The cleanup refuses to to
 every interview the API returns belongs to --sweep-sub.
 
 Runbook and flags: README. TOKEN and HOST_HEADER come from .env or the environment and reach both this
-script and k6.
+script and k6. GRAFANA_URL, GRAFANA_SERVICE_ACCOUNT_TOKEN, PROM_DS and APP_LABEL feed the per-window db
+read and stay in this process.
 """
 
 import argparse
 import csv
 import json
+import math
 import os
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime
@@ -35,6 +38,9 @@ CLEANUP_BUDGET_S = 30
 DEFAULT_START = 100
 DEFAULT_MAX_VUS = 800
 DELETE_WORKERS = 32
+# The metric exporter flushes on a timer, so the window's last samples land after k6 exits.
+# AI HERE: a fixed settle; poll the query/histogram count if a run ever needs to finish faster.
+GRAFANA_SETTLE_S = 80
 # One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
 LEVEL_TIMEOUT_S = 900
 RESULTS_DIR = Path(__file__).with_name("results")
@@ -61,6 +67,10 @@ def cfg(key, fallback=""):
 
 TOKEN = cfg("TOKEN")
 HOST_HEADER = cfg("HOST_HEADER")
+GRAFANA_URL = cfg("GRAFANA_URL", "https://sturdypoplar3317.grafana.net").rstrip("/")
+GRAFANA_TOKEN = cfg("GRAFANA_SERVICE_ACCOUNT_TOKEN")
+PROM_DS = cfg("PROM_DS", "grafanacloud-prom")
+APP_LABEL = cfg("APP_LABEL", "maxterview-backend")
 
 
 def call(method, url, body=None, timeout=120):
@@ -155,6 +165,8 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         env.update(RAMP_S="3", WARM_S="3", MEASURE_S="10")
     if measure_s:
         env["MEASURE_S"] = str(int(measure_s))
+    # k6 has no use for the Grafana token; keep it out of the child's environment.
+    env.pop("GRAFANA_SERVICE_ACCOUNT_TOKEN", None)
 
     started = time.time()
     window_start = datetime.fromtimestamp(
@@ -182,6 +194,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
     # k6 exits 99 on a failed threshold, so the exit code is the verdict.
     passed = completed.returncode == 0
     measured = measured_metrics(metrics)
+    db = db_metrics(window_start, int(env["MEASURE_S"]))
     return {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "run_id": run_id,
@@ -201,7 +214,84 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         "rps": summary.get("rps"),
         "seconds": round(elapsed, 1),
         "deleted_before": deleted,
+        **db,
     }
+
+
+DB_COLUMNS = (
+    "pool_wait_p50_ms",
+    "pool_wait_p95_ms",
+    "query_p50_ms",
+    "query_p95_ms",
+    "query_mean_ms",
+    "pool_size_max",
+    "pool_idle_min",
+)
+
+
+# The server side of the same window: the wait apart from the SQL, and how full the pool ran. A read
+# that fails leaves the columns blank and says why in db_note; the harness verdict is unchanged.
+def db_metrics(measure_start, measure_s):
+    blank = {**dict.fromkeys(DB_COLUMNS), "db_note": ""}
+    if not GRAFANA_TOKEN:
+        blank["db_note"] = "not recorded: GRAFANA_SERVICE_ACCOUNT_TOKEN unset"
+        return blank
+    end = datetime.fromisoformat(measure_start).timestamp() + measure_s
+    settle = end + GRAFANA_SETTLE_S - time.time()
+    if settle > 0:
+        time.sleep(settle)
+    svc = f'{{service_name="{APP_LABEL}"}}'
+    win = f"[{int(measure_s)}s]"
+    hist = lambda metric, quantile: (
+        f"histogram_quantile({quantile}, sum by (le) (increase({metric}_bucket{svc}{win})))"
+    )
+    queries = {
+        "pool_wait_p50_ms": (hist("db_pool_wait_duration_seconds", 0.5), 1000),
+        "pool_wait_p95_ms": (hist("db_pool_wait_duration_seconds", 0.95), 1000),
+        "query_p50_ms": (hist("db_query_duration_seconds", 0.5), 1000),
+        "query_p95_ms": (hist("db_query_duration_seconds", 0.95), 1000),
+        "query_mean_ms": (
+            f"sum(increase(db_query_duration_seconds_sum{svc}{win})) / sum(increase(db_query_duration_seconds_count{svc}{win}))",
+            1000,
+        ),
+        "pool_size_max": (f"max(max_over_time(db_pool_size_ratio{svc}{win}))", 1),
+        "pool_idle_min": (f"min(min_over_time(db_pool_idle_ratio{svc}{win}))", 1),
+    }
+
+    def one(item):
+        key, (expr, scale) = item
+        try:
+            value = prom(expr, end)
+        except Exception as exc:
+            return key, None, f"{key}: {exc}"
+        if value is None or not math.isfinite(value):
+            return key, None, f"{key}: no sample"
+        return key, round(value * scale, 1), None
+
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        results = list(pool.map(one, queries.items()))
+    row = {key: value for key, value, _ in results}
+    notes = list(dict.fromkeys(note for _, _, note in results if note))
+    if notes:
+        missing = sum(1 for _, value, _ in results if value is None)
+        row["db_note"] = ("not recorded: " if missing == len(results) else "partial: ") + "; ".join(notes)
+    else:
+        row["db_note"] = ""
+    return row
+
+
+# One instant query through Grafana's Prometheus proxy, at the end of the window.
+def prom(expr, at):
+    url = (
+        f"{GRAFANA_URL}/api/datasources/proxy/uid/{urllib.parse.quote(PROM_DS)}/api/v1/query?"
+        + urllib.parse.urlencode({"query": expr, "time": int(at)})
+    )
+    request = urllib.request.Request(url)
+    request.add_header("Authorization", f"Bearer {GRAFANA_TOKEN}")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.loads(response.read())
+    rows = payload.get("data", {}).get("result") or []
+    return float(rows[0]["value"][1]) if rows else None
 
 
 # A metric that is absent stays blank: a zero would read as a perfect number.
