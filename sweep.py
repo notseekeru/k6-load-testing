@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Ladder driver for the k6 sweep (SRE.md).
 
-Levels double. A failure in the first level stops the sweep: that is a broken test or a broken app, not
-load. The first failure above it is the top of the range, and the gap below is binary-searched for the
-highest level that still passes.
+Levels double. The smoke is the gate: a failure there stops the sweep because it is a broken test or a
+broken app, not load. The first failure above the smoke is the top of the range, and the gap below is
+binary-searched for the highest level that still passes.
 
-Rows are deleted between steps through the API, so the account the loop reads stays the same size and
+Rows are deleted between levels through the API, so the account the loop reads stays the same size and
 the curve is not partly made of the test's own writes. The cleanup refuses to touch anything unless
 every interview the API returns belongs to --sweep-sub.
 
@@ -41,7 +41,7 @@ DELETE_WORKERS = 32
 # The metric exporter flushes on a timer, so the window's last samples land after k6 exits.
 # AI HERE: a fixed settle; poll the query/histogram count if a run ever needs to finish faster.
 GRAFANA_SETTLE_S = 80
-# One level is the doc's phases plus the measurement window's graceful stop and k6's own startup.
+# One level is the k6 scenarios plus the measurement window's graceful stop and k6's own startup.
 LEVEL_TIMEOUT_S = 900
 RESULTS_DIR = Path(__file__).with_name("results")
 ENV_FILE = Path(__file__).with_name(".env")
@@ -146,7 +146,7 @@ def cleanup(api_url, sweep_sub):
     elapsed = time.monotonic() - started
     print(f"cleanup: {deleted} deleted, {failed} failed, {len(pending)} left behind, {elapsed:.1f}s of {CLEANUP_BUDGET_S}s, owner={sweep_sub}")
     if failed or pending:
-        sys.exit("ABORT: cleanup left rows behind, the next step would read a bigger account than the last")
+        sys.exit("ABORT: cleanup left rows behind, the next level would read a bigger account than the last")
     return deleted
 
 
@@ -331,10 +331,10 @@ def main():
     parser.add_argument("--sweep-sub", default="", help="the sweep owner_id every listed row must have; SWEEP_SUB from .env when unset")
     parser.add_argument("--k6", default="k6")
     parser.add_argument("--label", default="", help="a short tag for the configuration under test, written to every row")
-    parser.add_argument("--start", type=int, default=DEFAULT_START, help="first rung of the ladder, doubling from there")
+    parser.add_argument("--start", type=int, default=DEFAULT_START, help="first level of the ladder, doubling from there")
     parser.add_argument("--max-vus", type=int, default=DEFAULT_MAX_VUS, help="top of the ladder; doubling stops here")
-    parser.add_argument("--smoke", action="store_true", help="shorten the phases, for --only")
-    parser.add_argument("--no-cleanup", action="store_true", help="keep rows between steps (do not)")
+    parser.add_argument("--smoke", action="store_true", help="shorten every window, for --only")
+    parser.add_argument("--no-cleanup", action="store_true", help="keep rows between levels (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--only", type=int, help="run one level and stop")
     args = parser.parse_args()
@@ -363,7 +363,7 @@ def main():
         sys.exit(f"ABORT: --smoke shortens every window; it is for --only. The sweep opens with its own {SMOKE_VUS} VU smoke.")
 
     if args.only:
-        row = run_step(csv_path, args.only, args, phase="only")
+        row = record_level(csv_path, args.only, args, phase="only")
         print(f"{args.only} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}; csv {csv_path}")
         return
 
@@ -377,7 +377,7 @@ def main():
 
 
 def run_sweep(csv_path, args, levels):
-    smoke = run_step(csv_path, SMOKE_VUS, args, phase="smoke", smoke=True)
+    smoke = record_level(csv_path, SMOKE_VUS, args, phase="smoke", smoke=True)
     print(f"{SMOKE_VUS} VUs smoke: {smoke['verdict']} p95={ms(smoke['p95_ms'])} err={smoke['err_rate']}")
     if smoke["verdict"] != "pass":
         sys.exit(f"ABORT: the {SMOKE_VUS} VU smoke failed. The harness or the app is broken before any load: fix it, then run again.")
@@ -387,7 +387,7 @@ def run_sweep(csv_path, args, levels):
     passes = {SMOKE_VUS}
 
     for vus in levels:
-        row = run_step(csv_path, vus, args, between=True, phase="ladder")
+        row = record_level(csv_path, vus, args, between=True, phase="ladder")
         print(f"{vus} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
@@ -403,34 +403,34 @@ def run_sweep(csv_path, args, levels):
     low, high = search(csv_path, last_pass, first_fail, args, passes)
     print(f"boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
 
-    for phase in range(1, CONFIRM_ROUNDS + 1):
+    for round_no in range(1, CONFIRM_ROUNDS + 1):
         for run in range(CONFIRM_RUNS):
-            row = run_step(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
-            print(f"{low} VUs (phase {phase}, confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
+            row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
+            print(f"{low} VUs (round {round_no}, confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
             if row["verdict"] == "fail":
                 break
         else:
-            print(f"confirmed {low} VUs: {CONFIRM_RUNS}/{CONFIRM_RUNS} in phase {phase}")
+            print(f"confirmed {low} VUs: {CONFIRM_RUNS}/{CONFIRM_RUNS} in round {round_no}")
             return low
-        if phase == CONFIRM_ROUNDS:
+        if round_no == CONFIRM_ROUNDS:
             break
         high = low
         passes.discard(low)
         lower = [v for v in passes if v < low]
         if not lower:
-            print(f"{low} VUs failed confirmation with no passing rung below it; unconfirmed")
+            print(f"{low} VUs failed confirmation with no passing level below it; unconfirmed")
             return None
         low, high = search(csv_path, max(lower), high, args, passes)
         print(f"new boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
 
-    print(f"unconfirmed after {CONFIRM_ROUNDS} confirmation phases: no level passed {CONFIRM_RUNS}/{CONFIRM_RUNS}")
+    print(f"unconfirmed after {CONFIRM_ROUNDS} confirmation rounds: no level passed {CONFIRM_RUNS}/{CONFIRM_RUNS}")
     return None
 
 
 def search(csv_path, low, high, args, passes):
     while high - low > tolerance(low):
         mid = (low + high) // 2
-        row = run_step(csv_path, mid, args, between=True, phase="search")
+        row = record_level(csv_path, mid, args, between=True, phase="search")
         print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
         if row["verdict"] == "pass":
             low = mid
@@ -458,9 +458,9 @@ def self_check():
     levels = ladder(DEFAULT_START, DEFAULT_MAX_VUS)
     assert levels == [100, 200, 400, 800], levels
     assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
-    assert tolerance(SMOKE_VUS) < DEFAULT_START - SMOKE_VUS, "the search needs room between the smoke and the first rung"
+    assert tolerance(SMOKE_VUS) < DEFAULT_START - SMOKE_VUS, "the search needs room between the smoke and the first level"
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
-    assert CONFIRM_ROUNDS >= 1, "a sweep with no confirmation phase never proves the boundary"
+    assert CONFIRM_ROUNDS >= 1, "a sweep with no confirmation round never proves the boundary"
 
 
 def account_size(api_url):
@@ -481,7 +481,7 @@ def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=Fals
     return row
 
 
-def run_step(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False):
+def record_level(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False):
     row = run_one(vus, args, between, measure_s, phase, smoke)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())

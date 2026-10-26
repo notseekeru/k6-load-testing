@@ -5,8 +5,8 @@ over SSE, finishes it, reads the review, then works through the read endpoints. 
 workload as a sweep: a mandatory 10 VU smoke first, which aborts the run if it fails, then a ladder from
 100 VUs that doubles, brackets the first level that fails, binary searches the gap below it down to the
 smoke's 10 VUs, then re-runs the highest passing level three times and requires all three to pass. A
-failing confirmation ends that phase and reopens the search below the level, at most three phases. One
-CSV row per window, tagged `smoke`, `ladder`, `search` or `confirm`. The run's rows are deleted between
+failing confirmation run ends that round and reopens the search below the level, at most three rounds. One
+CSV row per window, tagged `smoke`, `ladder`, `search`, `confirm`, or `only`. The run's rows are deleted between
 levels, so every window starts from the same empty account.
 
 ## Layout
@@ -37,7 +37,7 @@ root. The template carries every value and what it does.
 ```sh
 nix develop
 k6 run main.js                                          # one level, TARGET_VUS users
-python3 sweep.py --sweep-sub <id>                       # smoke, then the ladder, cleanup between windows
+python3 sweep.py --sweep-sub <id>                       # smoke, then the ladder, cleanup between levels
 python3 sweep.py --sweep-sub <id> --only 10 --smoke     # that same smoke, without the ladder
 python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows, load nothing
 ```
@@ -54,4 +54,4 @@ The label is `--label` or `LABEL`, so a file names the build, pool and path it m
 
 `run_id` is the same stamp as the run's `results/level-<n>-<phase>-<run_id>.json`, so a row finds its summary
 in one lookup. `measure_start` is the UTC start of the measurement window, so a row lines up with Grafana
-without knowing the phase lengths. Both results files stay out of git.
+without knowing the run's timings. Both results files stay out of git.
