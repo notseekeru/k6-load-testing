@@ -32,6 +32,7 @@ Commits are atomic: one logical change per commit, scoped to a coherent set of f
 
 - **Commit when justifiable:** Commit proactively when file changes form a justifiable logical unit, per the Commit Policy above.
 - **Always Ask when unclear:** If a request is underspecified or the choice is consequential, ask before acting. Never guess on scope.
+- **Ask until satisfied:** Question in rounds until no open decision is left. One round of answers is not enough; stopping early makes the user repeat themselves.
 - **Skills:** Never invoke, load, or apply an agentic skill unless the user explicitly instructs or asks for it.
 - **Data Safety:** Never execute commands that risk uncommitted or unstaged data without explicit user confirmation.
 - **Security:** **ZERO TOUCH POLICY ON CREDENTIALS/SECRETS UNTIL EXPLICITLY STATED.** Do not read, fetch, display, store, or infer any credential, token, or secret. If a task requires one, ALWAYS ask the user.
