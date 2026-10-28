@@ -39,7 +39,7 @@ const HOST_HEADER = cfg("HOST_HEADER", "");
 
 const RAMP_S = num("RAMP_S", 30);
 const WARM_S = num("WARM_S", 60);
-const MEASURE_S = num("MEASURE_S", 180);
+const MEASURE_S = num("MEASURE_S", 120);
 
 // SRE.md's gates, held here so k6 can enforce them.
 const P95_MS = 1000;
