@@ -30,8 +30,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 SMOKE_VUS = 10
-CONFIRM_RUNS = 3
-CONFIRM_ROUNDS = 3
 CONFIRM_MEASURE_S = 300
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
@@ -151,7 +149,7 @@ def cleanup(api_url, sweep_sub):
 
 
 def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False):
-    # One file per run, so the three confirmations at one level do not overwrite each other.
+    # One file per run, so a level's ladder, search and confirm summaries stay apart.
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     summary_path = RESULTS_DIR / f"level-{int(level)}-{phase}-{run_id}.json"
     env = {
@@ -384,14 +382,12 @@ def run_sweep(csv_path, args, levels):
 
     last_pass = SMOKE_VUS
     first_fail = None
-    passes = {SMOKE_VUS}
 
     for vus in levels:
         row = record_level(csv_path, vus, args, between=True, phase="ladder")
         print(f"{vus} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}")
         if row["verdict"] == "pass":
             last_pass = vus
-            passes.add(vus)
             continue
         first_fail = vus
         break
@@ -400,41 +396,24 @@ def run_sweep(csv_path, args, levels):
         print(f"no failure up to {last_pass} VUs; raise --max-vus")
         return None
 
-    low, high = search(csv_path, last_pass, first_fail, args, passes)
+    low, high = search(csv_path, last_pass, first_fail, args)
     print(f"boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
 
-    for round_no in range(1, CONFIRM_ROUNDS + 1):
-        for run in range(CONFIRM_RUNS):
-            row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
-            print(f"{low} VUs (round {round_no}, confirm {run + 1}/{CONFIRM_RUNS}): {row['verdict']}")
-            if row["verdict"] == "fail":
-                break
-        else:
-            print(f"confirmed {low} VUs: {CONFIRM_RUNS}/{CONFIRM_RUNS} in round {round_no}")
-            return low
-        if round_no == CONFIRM_ROUNDS:
-            break
-        high = low
-        passes.discard(low)
-        lower = [v for v in passes if v < low]
-        if not lower:
-            print(f"{low} VUs failed confirmation with no passing level below it; unconfirmed")
-            return None
-        low, high = search(csv_path, max(lower), high, args, passes)
-        print(f"new boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
-
-    print(f"unconfirmed after {CONFIRM_ROUNDS} confirmation rounds: no level passed {CONFIRM_RUNS}/{CONFIRM_RUNS}")
-    return None
+    row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
+    print(f"{low} VUs (confirm {CONFIRM_MEASURE_S}s): {row['verdict']}")
+    if row["verdict"] != "pass":
+        sys.exit(f"ABORT: {low} VUs passed the search and failed its {CONFIRM_MEASURE_S}s run; the boundary is unproven, csv {csv_path}")
+    print(f"confirmed {low} VUs in one {CONFIRM_MEASURE_S}s run; csv {csv_path}")
+    return low
 
 
-def search(csv_path, low, high, args, passes):
+def search(csv_path, low, high, args):
     while high - low > tolerance(low):
         mid = (low + high) // 2
         row = record_level(csv_path, mid, args, between=True, phase="search")
         print(f"{mid} VUs (search {low}-{high}): {row['verdict']}")
         if row["verdict"] == "pass":
             low = mid
-            passes.add(mid)
         else:
             high = mid
     return low, high
@@ -460,7 +439,6 @@ def self_check():
     assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
     assert tolerance(SMOKE_VUS) < DEFAULT_START - SMOKE_VUS, "the search needs room between the smoke and the first level"
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
-    assert CONFIRM_ROUNDS >= 1, "a sweep with no confirmation round never proves the boundary"
 
 
 def account_size(api_url):

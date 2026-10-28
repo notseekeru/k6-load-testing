@@ -4,10 +4,9 @@ One virtual user walks the whole surface: it creates a run, starts it, opens it,
 over SSE, finishes it, reads the review, then works through the read endpoints. `sweep.py` drives that
 workload as a sweep: a mandatory 10 VU smoke first, which aborts the run if it fails, then a ladder from
 100 VUs that doubles, brackets the first level that fails, binary searches the gap below it down to the
-smoke's 10 VUs, then re-runs the highest passing level three times and requires all three to pass. A
-failing confirmation run ends that round and reopens the search below the level, at most three rounds. One
-CSV row per window, tagged `smoke`, `ladder`, `search`, `confirm`, or `only`. The run's rows are deleted between
-levels, so every window starts from the same empty account.
+smoke's 10 VUs, then re-runs the highest passing level once for `CONFIRM_MEASURE_S`; a failure there ends
+the sweep. One CSV row per window, tagged `smoke`, `ladder`, `search`, `confirm`, or `only`. The run's rows
+are deleted between levels, so every window starts from the same empty account.
 
 ## Layout
 
