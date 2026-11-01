@@ -235,7 +235,6 @@ function transcript(id) {
 // PDF extract (the doc excludes both, and PDF import OOMs the pod).
 const READS = [
     "/interviews",
-    "/stats/dimensions",
     "/stats/analytics",
     "/stats/dashboard",
     "/usage",
