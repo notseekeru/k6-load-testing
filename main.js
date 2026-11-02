@@ -59,7 +59,10 @@ export const options = {
                 { duration: `${WARM_S}s`, target: TARGET_VUS },
             ],
             tags: { phase: "warm" },
-            gracefulStop: `${RAMP_S}s`,
+            // 0, not the ramp: a graceful stop lets a full iteration (~20s) run past the warm stage, so
+            // the window's first seconds carry two times the level's VUs and the latency measured there
+            // belongs to a concurrency the level never names.
+            gracefulStop: "0s",
         },
         measure: {
             executor: "constant-vus",
@@ -67,7 +70,9 @@ export const options = {
             duration: `${MEASURE_S}s`,
             startTime: `${RAMP_S + WARM_S}s`,
             tags: { phase: "measure" },
-            gracefulStop: "120s",
+            // 0 for the same reason on the other edge: a tail counted here enters rps and dilutes the
+            // tail latencies with requests issued after the window closed.
+            gracefulStop: "0s",
         },
     },
     summaryTrendStats: ["avg", "min", "med", "max", "p(90)", "p(95)", "p(99)"],
@@ -124,7 +129,19 @@ export function handleSummary(data) {
     const counted = data.metrics.measure_requests?.values?.count;
     if (!counted) console.warn("measure: no requests counted, rps stays blank");
     const rps = counted ? +(counted / MEASURE_S).toFixed(1) : null;
-    return { [__ENV.SUMMARY_PATH]: JSON.stringify({ ...data, rps }) };
+    // handleSummary runs in its own context, so setup()'s stamp is not visible here: derive the
+    // start from k6's own run duration instead of from this process's spawn time.
+    const duration_ms = data.state?.testRunDurationMs;
+    const measure_start_ms = duration_ms
+        ? Date.now() - duration_ms + (RAMP_S + WARM_S) * 1000
+        : null;
+    return {
+        [__ENV.SUMMARY_PATH]: JSON.stringify({
+            ...data,
+            rps,
+            measure_start_ms,
+        }),
+    };
 }
 
 export default function () {
@@ -138,6 +155,10 @@ export default function () {
         !check(created, {
             "interview: 201 with an id": (r) =>
                 r.status === 201 && typeof safe(r)?.id === "string",
+            // The arc is what bounds a run, so a response without one is a schema drift that would
+            // otherwise drop every turn silently.
+            "interview: carries the arc": (r) =>
+                Array.isArray(safe(r)?.plan) && safe(r).plan.length > 1,
         })
     )
         return;
@@ -148,7 +169,10 @@ export default function () {
     send("POST", "/interviews/{id}/start", null, [200], id);
 
     let closing = stream("/interviews/{id}/chat/kickoff", null, "opener", id);
-    const turns = Math.min(randInt(TURNS_MIN, TURNS_MAX), plannedQuestions(interview));
+    const turns = Math.min(randInt(TURNS_MIN, TURNS_MAX), plannedQuestions(safe(created)));
+    // The draw can only break silently: a zero skips the loop and every check inside it, so the run
+    // would report clean without ever asking a question.
+    if (!check(null, { "turns: at least one": () => turns >= 1 })) return;
     for (let turn = 1; !closing && turn <= turns; turn++) {
         sleep(rand(THINK_MIN_S, THINK_MAX_S));
         const body = JSON.stringify({
@@ -384,12 +408,13 @@ function pick(list) {
     return list[randInt(0, list.length - 1)];
 }
 
+// The same draw the recorded sweeps used (0-2 + 0-2 + 1-4, then the 2-8 turn cap), so a run stays
+// comparable to them. The arc is the ceiling, not the draw: a level pinned to `standard` asks far more
+// questions than the cap allows, and depth is sent so that stays true.
 function plannedQuestions(interview) {
-    return (
-        interview.mix_chitchat +
-        interview.mix_behavioural +
-        interview.mix_technical
-    );
+    const drawn = randInt(0, 2) + randInt(0, 2) + randInt(1, 4);
+    const arc = Array.isArray(interview?.plan) ? interview.plan.length - 1 : Infinity;
+    return Math.min(drawn, arc);
 }
 
 function randomInterview() {
@@ -402,9 +427,7 @@ function randomInterview() {
         brutally_honest: Math.random() < 0.3,
         human_mode: Math.random() < 0.8,
         hardcore: false,
-        mix_chitchat: randInt(0, 2),
-        mix_behavioural: randInt(0, 2),
-        mix_technical: randInt(1, 4),
+        depth: "standard",
     };
 }
 

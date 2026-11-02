@@ -167,9 +167,6 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
     env.pop("GRAFANA_SERVICE_ACCOUNT_TOKEN", None)
 
     started = time.time()
-    window_start = datetime.fromtimestamp(
-        started + int(env.get("RAMP_S", 30)) + int(env.get("WARM_S", 60)), UTC
-    ).isoformat(timespec="seconds")
     try:
         completed = subprocess.run(
             [args.k6, "run", str(Path(__file__).with_name("main.js"))],
@@ -189,6 +186,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
 
     summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
     metrics = summary.get("metrics", {})
+    window_start = window_start_of(summary, started, env)
     # k6 exits 99 on a failed threshold, so the exit code is the verdict.
     passed = completed.returncode == 0
     measured = measured_metrics(metrics)
@@ -214,6 +212,18 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         "deleted_before": deleted,
         **db,
     }
+
+
+# k6's own test start, so the Grafana window lines up with the server's. The process spawn is the
+# fallback, and it opens a second or two early because it is taken before k6 starts.
+def window_start_of(summary, started, env):
+    stamp = summary.get("measure_start_ms")
+    epoch = (
+        stamp / 1000
+        if stamp
+        else started + int(env.get("RAMP_S", 30)) + int(env.get("WARM_S", 60))
+    )
+    return datetime.fromtimestamp(epoch, UTC).isoformat(timespec="seconds")
 
 
 DB_COLUMNS = (
