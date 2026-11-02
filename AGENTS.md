@@ -26,6 +26,7 @@ Commits are atomic: one logical change per commit, scoped to a coherent set of f
 - **Amend, do not farm:** If a new edit extends the same logical change as the last unpushed commit, fold it in with `git commit --amend`. Only open a new commit when the change is genuinely distinct.
 - **Relevance gates amends:** Never amend across distinct concerns. If a change differs from the last commit, create a new commit. If whether it is the same change is ambiguous, ask — do not guess.
 - **Commit asap:** On a finished task, commit. Settle the logical scope, the files in it, and whether it amends or opens a new commit.
+- **PR to main:** In repos that land changes through pull requests, the PR is based on `main`: no direct pushes to `main`, no stacked PRs, and when a change depends on another, merge the first and rebase. Repos without a PR workflow commit straight to `main`.
 - **Formatting:** Conventional commits only. Scope + prefix: `ref(scope):`, `feat(scope):`, `fix(scope):`, `chore(scope):`, `docs(scope):`, `revert(scope):`. Subject < 60 chars, no body.
 
 ## Hard Rules
