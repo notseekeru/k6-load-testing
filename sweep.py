@@ -206,6 +206,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         "max_ms": measured.get("max"),
         "err_rate": measured.get("err_rate"),
         "iterations": measured.get("iterations"),
+        "measure_iterations": measured.get("measure_iterations"),
         "http_reqs": measured.get("http_reqs"),
         "rps": summary.get("rps"),
         "seconds": round(elapsed, 1),
@@ -313,6 +314,9 @@ def measured_metrics(metrics):
         "max": rounded(duration.get("max")),
         "err_rate": rounded(failed.get("rate"), 5),
         "iterations": int(metrics.get("iterations", {}).get("values", {}).get("count", 0)),
+        "measure_iterations": int(
+            metrics.get("measure_iterations", {}).get("values", {}).get("count", 0)
+        ),
         "http_reqs": int(metrics.get("http_reqs", {}).get("values", {}).get("count", 0)),
     }
 

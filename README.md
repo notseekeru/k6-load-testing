@@ -46,8 +46,9 @@ python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows,
 ## Output
 
 `results/sweep-<utc>.csv`, one row per window: its label, phase and window length, p50, p95, p99, max, error
-rate, iterations, requests, rps of the measurement window, seconds and the account's row count before
-and after the window. `pool_wait_*`, `query_*`, `pool_size_max` and `pool_idle_min` are read from
+rate, iterations, measure iterations, requests, rps of the measurement window, seconds and the account's row count before
+and after the window. `iterations` is k6's completed count, which both scenarios' cut-in-flight ending makes
+short; `measure_iterations` is how many started inside the window. `pool_wait_*`, `query_*`, `pool_size_max` and `pool_idle_min` are read from
 Grafana's Prometheus over the same window; a read that fails stays blank with its reason in `db_note`.
 The label is `--label` or `LABEL`, so a file names the build, pool and path it measured.
 

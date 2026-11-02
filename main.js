@@ -48,6 +48,9 @@ const P99_MS = 5000;
 // AI HERE: counted here because a tagged submetric only exists for a thresholded tag set, and phases by
 // scenario name, so a second measure-phase scenario has to match.
 const MEASURE_REQS = new Counter("measure_requests");
+// k6's own `iterations` counts only the ones that finished, and both scenarios now end by cutting the
+// in-flight iteration, so a short window can report three completions out of twenty-three starts.
+const MEASURE_ITERS = new Counter("measure_iterations");
 
 export const options = {
     scenarios: {
@@ -145,6 +148,7 @@ export function handleSummary(data) {
 }
 
 export default function () {
+    if (inMeasure()) MEASURE_ITERS.add(1);
     const interview = randomInterview();
     const created = http.post(
         `${API}/interviews`,
@@ -338,9 +342,16 @@ function params(name, tags) {
     if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
     if (HOST_HEADER) headers.Host = HOST_HEADER;
     try {
-        if (exec.scenario.name === "measure") MEASURE_REQS.add(1);
+        if (inMeasure()) MEASURE_REQS.add(1);
     } catch (e) {}
-    return { headers, tags: { name, model: "false", ...(tags || {}) } };
+    return { headers, tags: { name, model: "false", ...(tags || {}) } };}
+
+function inMeasure() {
+    try {
+        return exec.scenario.name === "measure";
+    } catch (e) {
+        return false;
+    }
 }
 
 function parseSse(body) {
