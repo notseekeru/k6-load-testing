@@ -32,7 +32,7 @@ from pathlib import Path
 
 SMOKE_VUS = 10
 CONFIRM_MEASURE_S = 300
-DEFAULT_CONFIRM_RUNS = 1
+DEFAULT_CONFIRM_RUNS = 2
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
 DEFAULT_START = 100
@@ -420,11 +420,14 @@ def run_sweep(csv_path, args, levels):
     print(f"boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
 
     for run in range(1, args.confirm_runs + 1):
-        row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
+        row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm", confirm_run=f"{run}/{args.confirm_runs}")
         print(f"{low} VUs (confirm {run}/{args.confirm_runs}, {CONFIRM_MEASURE_S}s): {row['verdict']}")
         if row["verdict"] != "pass":
             sys.exit(f"ABORT: {low} VUs failed confirm {run}/{args.confirm_runs} ({CONFIRM_MEASURE_S}s); the boundary is unproven, csv {csv_path}")
-    print(f"confirmed {low} VUs, {args.confirm_runs} confirm window(s) of {CONFIRM_MEASURE_S}s; csv {csv_path}")
+    if args.confirm_runs < 2:
+        print(f"{low} VUs UNCONFIRMED: one window, nothing to compare it against; csv {csv_path}")
+    else:
+        print(f"confirmed {low} VUs, {args.confirm_runs} windows of {CONFIRM_MEASURE_S}s; csv {csv_path}")
     return low
 
 
@@ -449,7 +452,7 @@ def ladder(start, max_vus):
 
 
 def tolerance(low):
-    return max(25, int(0.1 * low))
+    return max(5, int(0.1 * low))
 
 
 # Framework-free and run before any request leaves the box: the ladder and the tolerance are what the
@@ -461,6 +464,8 @@ def self_check():
     assert levels[-1] <= DEFAULT_MAX_VUS < levels[-1] * 2, levels
     assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
     assert tolerance(SMOKE_VUS) < DEFAULT_START - SMOKE_VUS, "the search needs room between the smoke and the first level"
+    assert tolerance(SMOKE_VUS) < 10, "the search has to resolve the band between the smoke and the first level, not skip it"
+    assert DEFAULT_CONFIRM_RUNS >= 2, "one window is not a confirmed boundary"
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
 
 
@@ -471,7 +476,7 @@ def account_size(api_url):
         return None
 
 
-def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False):
+def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run=""):
     if between:
         time.sleep(GAP_S)
     deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
@@ -479,11 +484,12 @@ def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=Fals
         time.sleep(GAP_S)
     row = run_level(vus, args, deleted, measure_s, phase, smoke)
     row["rows_after"] = account_size(args.api_url)
+    row["confirm_run"] = confirm_run
     return row
 
 
-def record_level(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False):
-    row = run_one(vus, args, between, measure_s, phase, smoke)
+def record_level(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run=""):
+    row = run_one(vus, args, between, measure_s, phase, smoke, confirm_run)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())
         if handle.tell() == 0:
