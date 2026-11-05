@@ -31,6 +31,7 @@ from pathlib import Path
 
 SMOKE_VUS = 10
 CONFIRM_MEASURE_S = 300
+DEFAULT_CONFIRM_RUNS = 2
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
 DEFAULT_START = 100
@@ -349,11 +350,13 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between levels (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--only", type=int, help="run one level and stop")
+    parser.add_argument("--confirm-runs", type=int, help=f"confirmation windows at the boundary, all must pass (CONFIRM_RUNS, default {DEFAULT_CONFIRM_RUNS})")
     args = parser.parse_args()
 
     args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
     args.sweep_sub = args.sweep_sub or cfg("SWEEP_SUB")
     args.label = args.label or cfg("LABEL")
+    args.confirm_runs = args.confirm_runs if args.confirm_runs is not None else int(cfg("CONFIRM_RUNS", DEFAULT_CONFIRM_RUNS))
     if not args.api_url:
         sys.exit("ABORT: --api-url or API_URL in .env is required")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -361,6 +364,8 @@ def main():
     csv_path = RESULTS_DIR / f"sweep-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
     if args.start < 1:
         sys.exit("ABORT: --start must be at least 1, or the ladder never advances")
+    if args.confirm_runs < 1:
+        sys.exit("ABORT: --confirm-runs or CONFIRM_RUNS must be at least 1")
 
     # Only the cleanup path needs a real identity; with --no-cleanup nothing is deleted, so a harness
     # check may run as dev-user.
@@ -413,11 +418,12 @@ def run_sweep(csv_path, args, levels):
     low, high = search(csv_path, last_pass, first_fail, args)
     print(f"boundary: {low} VUs pass, {high} VUs fail; csv {csv_path}")
 
-    row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
-    print(f"{low} VUs (confirm {CONFIRM_MEASURE_S}s): {row['verdict']}")
-    if row["verdict"] != "pass":
-        sys.exit(f"ABORT: {low} VUs passed the search and failed its {CONFIRM_MEASURE_S}s run; the boundary is unproven, csv {csv_path}")
-    print(f"confirmed {low} VUs in one {CONFIRM_MEASURE_S}s run; csv {csv_path}")
+    for run in range(1, args.confirm_runs + 1):
+        row = record_level(csv_path, low, args, between=True, measure_s=CONFIRM_MEASURE_S, phase="confirm")
+        print(f"{low} VUs (confirm {run}/{args.confirm_runs}, {CONFIRM_MEASURE_S}s): {row['verdict']}")
+        if row["verdict"] != "pass":
+            sys.exit(f"ABORT: {low} VUs failed confirm {run}/{args.confirm_runs} ({CONFIRM_MEASURE_S}s); the boundary is unproven, csv {csv_path}")
+    print(f"confirmed {low} VUs in {args.confirm_runs} consecutive {CONFIRM_MEASURE_S}s windows; csv {csv_path}")
     return low
 
 
