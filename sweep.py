@@ -16,6 +16,7 @@ read and stay in this process.
 
 import argparse
 import csv
+import itertools
 import json
 import math
 import os
@@ -35,7 +36,7 @@ DEFAULT_CONFIRM_RUNS = 1
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
 DEFAULT_START = 100
-DEFAULT_MAX_VUS = 800
+DEFAULT_MAX_VUS = 100000
 DELETE_WORKERS = 32
 # The metric exporter flushes on a timer, so the window's last samples land after k6 exits.
 # AI HERE: a fixed settle; poll the query/histogram count if a run ever needs to finish faster.
@@ -455,7 +456,9 @@ def tolerance(low):
 # search depends on.
 def self_check():
     levels = ladder(DEFAULT_START, DEFAULT_MAX_VUS)
-    assert levels == [100, 200, 400, 800], levels
+    assert levels[0] == DEFAULT_START, levels
+    assert all(level * 2 == nxt for level, nxt in itertools.pairwise(levels)), levels
+    assert levels[-1] <= DEFAULT_MAX_VUS < levels[-1] * 2, levels
     assert ladder(10, 100) == [10, 20, 40, 80], ladder(10, 100)
     assert tolerance(SMOKE_VUS) < DEFAULT_START - SMOKE_VUS, "the search needs room between the smoke and the first level"
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
