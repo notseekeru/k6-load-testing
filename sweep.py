@@ -424,7 +424,7 @@ def run_sweep(csv_path, args, levels):
         print(f"{low} VUs (confirm {run}/{args.confirm_runs}, {CONFIRM_MEASURE_S}s): {row['verdict']}")
         if row["verdict"] != "pass":
             sys.exit(f"ABORT: {low} VUs failed confirm {run}/{args.confirm_runs} ({CONFIRM_MEASURE_S}s); the boundary is unproven, csv {csv_path}")
-    print(f"confirmed {low} VUs in {args.confirm_runs} consecutive {CONFIRM_MEASURE_S}s windows; csv {csv_path}")
+    print(f"confirmed {low} VUs, {args.confirm_runs} confirm window(s) of {CONFIRM_MEASURE_S}s; csv {csv_path}")
     return low
 
 
