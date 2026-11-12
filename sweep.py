@@ -362,6 +362,7 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between levels (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--only", type=int, help="run one level and stop")
+    parser.add_argument("--floor", action="store_true", help="run the /health floor window alone and stop")
     parser.add_argument("--confirm-runs", type=int, help=f"confirmation windows at the boundary, all must pass (CONFIRM_RUNS, default {DEFAULT_CONFIRM_RUNS})")
     parser.add_argument("--no-floor", action="store_true", help=f"skip the {FLOOR_MEASURE_S}s /health floor window that opens every sweep")
     args = parser.parse_args()
@@ -392,6 +393,10 @@ def main():
     if args.smoke and not args.only:
         sys.exit(f"ABORT: --smoke shortens every window; it is for --only. The sweep opens with its own {SMOKE_VUS} VU smoke.")
 
+    if args.floor:
+        run_floor(csv_path, args)
+        return
+
     if args.only:
         row = record_level(csv_path, args.only, args, phase="only")
         print(f"{args.only} VUs: {row['verdict']} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} err={row['err_rate']}; csv {csv_path}")
@@ -406,10 +411,15 @@ def main():
     run_sweep(csv_path, args, levels)
 
 
+def run_floor(csv_path, args):
+    row = record_level(csv_path, 0, args, measure_s=FLOOR_MEASURE_S, phase="floor", script="floor.js")
+    print(f"floor: p50={ms(row['p50_ms'])} p95={ms(row['p95_ms'])} p99={ms(row['p99_ms'])} at {row['rps']} rps; csv {csv_path}")
+    return row
+
+
 def run_sweep(csv_path, args, levels):
     if not args.no_floor:
-        floor = record_level(csv_path, 0, args, measure_s=FLOOR_MEASURE_S, phase="floor", script="floor.js")
-        print(f"floor: p95={ms(floor['p95_ms'])} p99={ms(floor['p99_ms'])} at {floor['rps']} rps")
+        run_floor(csv_path, args)
 
     smoke = record_level(csv_path, SMOKE_VUS, args, phase="smoke", smoke=True)
     print(f"{SMOKE_VUS} VUs smoke: {smoke['verdict']} p95={ms(smoke['p95_ms'])} err={smoke['err_rate']}")
@@ -495,7 +505,7 @@ def account_size(api_url):
 def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run="", script="main.js"):
     if between:
         time.sleep(GAP_S)
-    deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
+    deleted = 0 if args.no_cleanup or phase == "floor" else cleanup(args.api_url, args.sweep_sub)
     if between:
         time.sleep(GAP_S)
     row = run_level(vus, args, deleted, measure_s, phase, smoke, script)

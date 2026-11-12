@@ -36,8 +36,9 @@ root. The template carries every value and what it does.
 ```sh
 nix develop
 k6 run main.js                                          # one level, TARGET_VUS users
-python3 sweep.py --sweep-sub <id>                       # smoke, then the ladder, cleanup between levels
+python3 sweep.py --sweep-sub <id>                       # floor, smoke, then the ladder, cleanup between levels
 python3 sweep.py --sweep-sub <id> --only 10 --smoke     # that same smoke, without the ladder
+python3 sweep.py --sweep-sub <id> --floor               # the /health floor alone, no ladder
 python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows, load nothing
 ```
 
@@ -45,7 +46,8 @@ python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows,
 
 ## Output
 
-`results/sweep-<utc>.csv`, one row per window: its label, phase and window length, p50, p95, p99, max, error
+`results/sweep-<utc>.csv`, one row per window: its label, phase and window length, `confirm_run` on a
+confirmation window, p50, p95, p99, max, error
 rate, iterations, measure iterations, requests, rps of the measurement window, seconds and the account's row count before
 and after the window. `iterations` is k6's completed count, which both scenarios' cut-in-flight ending makes
 short; `measure_iterations` is how many started inside the window. `pool_wait_*`, `query_*`, `pool_size_max` and `pool_idle_min` are read from
