@@ -33,6 +33,8 @@ from pathlib import Path
 SMOKE_VUS = 10
 CONFIRM_MEASURE_S = 300
 DEFAULT_CONFIRM_RUNS = 2
+FLOOR_MEASURE_S = 120
+FLOOR_RPS = 70
 GAP_S = 15
 CLEANUP_BUDGET_S = 30
 DEFAULT_START = 100
@@ -150,7 +152,7 @@ def cleanup(api_url, sweep_sub):
     return deleted
 
 
-def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False):
+def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False, script="main.js"):
     # One file per run, so a level's ladder, search and confirm summaries stay apart.
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     summary_path = RESULTS_DIR / f"level-{int(level)}-{phase}-{run_id}.json"
@@ -159,6 +161,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         **os.environ,
         "API_URL": args.api_url,
         "TARGET_VUS": str(int(level)),
+        **({"FLOOR_RPS": str(FLOOR_RPS)} if script == "floor.js" else {}),
         "SUMMARY_PATH": str(summary_path),
     }
     if args.smoke or smoke:
@@ -171,7 +174,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
     started = time.time()
     try:
         completed = subprocess.run(
-            [args.k6, "run", str(Path(__file__).with_name("main.js"))],
+            [args.k6, "run", str(Path(__file__).with_name(script))],
             env=env,
             capture_output=True,
             text=True,
@@ -191,8 +194,12 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
     window_start = window_start_of(summary, started, env)
     # k6 exits 99 on a failed threshold, so the exit code is the verdict.
     passed = completed.returncode == 0
-    measured = measured_metrics(metrics)
-    db = db_metrics(window_start, int(env["MEASURE_S"]))
+    measured = measured_metrics(metrics, fallback=phase == "floor")
+    db = (
+        {**dict.fromkeys(DB_COLUMNS), "db_note": "floor: no database"}
+        if phase == "floor"
+        else db_metrics(window_start, int(env["MEASURE_S"]))
+    )
     return {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "run_id": run_id,
@@ -201,7 +208,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False)
         "phase": phase,
         "vus": int(level),
         "measure_s": int(env["MEASURE_S"]),
-        "verdict": "pass" if passed else "fail",
+        "verdict": ("pass" if passed else "fail") if phase != "floor" else "n/a",
         "p50_ms": measured.get("p50"),
         "p95_ms": measured.get("p95"),
         "p99_ms": measured.get("p99"),
@@ -306,9 +313,11 @@ def prom(expr, at):
 
 
 # A metric that is absent stays blank: a zero would read as a perfect number.
-def measured_metrics(metrics):
-    duration = pick_metric(metrics, "http_req_duration", ("phase:measure", "model:false"))
-    failed = pick_metric(metrics, "http_req_failed")
+def measured_metrics(metrics, fallback=False):
+    duration = pick_metric(
+        metrics, "http_req_duration", ("phase:measure", "model:false"), untagged=fallback
+    )
+    failed = pick_metric(metrics, "http_req_failed", untagged=fallback)
     return {
         "p50": rounded(duration.get("med")),
         "p95": rounded(duration.get("p(95)")),
@@ -332,10 +341,12 @@ def ms(value):
 
 
 # phase:measure only: the untagged metric folds the ramp and the warm-up into the same number.
-def pick_metric(metrics, name, tags=("phase:measure",)):
+def pick_metric(metrics, name, tags=("phase:measure",), untagged=False):
     for key, value in metrics.items():
         if key.startswith(f"{name}{{") and all(tag in key for tag in tags):
             return value.get("values", {})
+    if untagged and name in metrics:
+        return metrics[name].get("values", {})
     return {}
 
 
@@ -352,6 +363,7 @@ def main():
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--only", type=int, help="run one level and stop")
     parser.add_argument("--confirm-runs", type=int, help=f"confirmation windows at the boundary, all must pass (CONFIRM_RUNS, default {DEFAULT_CONFIRM_RUNS})")
+    parser.add_argument("--no-floor", action="store_true", help=f"skip the {FLOOR_MEASURE_S}s /health floor window that opens every sweep")
     args = parser.parse_args()
 
     args.api_url = (args.api_url or cfg("API_URL")).rstrip("/")
@@ -395,6 +407,10 @@ def main():
 
 
 def run_sweep(csv_path, args, levels):
+    if not args.no_floor:
+        floor = record_level(csv_path, 0, args, measure_s=FLOOR_MEASURE_S, phase="floor", script="floor.js")
+        print(f"floor: p95={ms(floor['p95_ms'])} p99={ms(floor['p99_ms'])} at {floor['rps']} rps")
+
     smoke = record_level(csv_path, SMOKE_VUS, args, phase="smoke", smoke=True)
     print(f"{SMOKE_VUS} VUs smoke: {smoke['verdict']} p95={ms(smoke['p95_ms'])} err={smoke['err_rate']}")
     if smoke["verdict"] != "pass":
@@ -476,20 +492,20 @@ def account_size(api_url):
         return None
 
 
-def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run=""):
+def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run="", script="main.js"):
     if between:
         time.sleep(GAP_S)
     deleted = 0 if args.no_cleanup else cleanup(args.api_url, args.sweep_sub)
     if between:
         time.sleep(GAP_S)
-    row = run_level(vus, args, deleted, measure_s, phase, smoke)
+    row = run_level(vus, args, deleted, measure_s, phase, smoke, script)
     row["rows_after"] = account_size(args.api_url)
     row["confirm_run"] = confirm_run
     return row
 
 
-def record_level(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run=""):
-    row = run_one(vus, args, between, measure_s, phase, smoke, confirm_run)
+def record_level(csv_path, vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run="", script="main.js"):
+    row = run_one(vus, args, between, measure_s, phase, smoke, confirm_run, script)
     with csv_path.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, row.keys())
         if handle.tell() == 0:
