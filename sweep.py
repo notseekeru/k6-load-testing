@@ -119,15 +119,34 @@ def sweep_subs(args, vus=0):
         return [args.sweep_sub]
     subs = []
     for path in sorted(RESULTS_DIR.glob("sweep-*.csv")):
+        session = path.stem.removeprefix("sweep-")
+        if session != args.session and (RESULTS_DIR / f"cleared-{session}").exists():
+            continue
         with path.open(newline="") as handle:
             rows = [row for row in csv.DictReader(handle) if row.get("identity") == "vu"]
         highest = max((int(row["vus"]) for row in rows if row.get("vus")), default=None)
         if highest is None:
             continue
-        session = path.stem.removeprefix("sweep-")
         subs.extend(identity_sub(args.sweep_sub, session, vu) for vu in range(highest + 1))
     subs.extend(identity_sub(args.sweep_sub, args.session, vu) for vu in range(vus + 1))
     return list(dict.fromkeys(subs))
+
+
+# A past session that a cleanup emptied cannot hold rows again, so one marker keeps the account list
+# from growing by every run's VUs forever.
+def mark_cleared(args):
+    if args.identity != "vu":
+        return
+    for path in RESULTS_DIR.glob("sweep-*.csv"):
+        session = path.stem.removeprefix("sweep-")
+        if session != args.session:
+            (RESULTS_DIR / f"cleared-{session}").touch()
+
+
+def sweep_cleanup(args, vus=0):
+    deleted = cleanup(args.api_url, sweep_subs(args, vus))
+    mark_cleared(args)
+    return deleted
 
 
 def cleanup(api_url, subs):
@@ -427,7 +446,7 @@ def main():
         sys.exit("ABORT: --sweep-sub or SWEEP_SUB must name the sweep identity (DEV_USER_SUB), not dev-user")
 
     if args.cleanup_only:
-        cleanup(args.api_url, sweep_subs(args))
+        sweep_cleanup(args)
         return
 
     if args.smoke and not args.only:
@@ -548,7 +567,7 @@ def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=Fals
     if between:
         time.sleep(GAP_S)
     subs = sweep_subs(args, vus)
-    deleted = 0 if args.no_cleanup or phase == "floor" else cleanup(args.api_url, subs)
+    deleted = 0 if args.no_cleanup or phase == "floor" else sweep_cleanup(args, vus)
     if between:
         time.sleep(GAP_S)
     row = run_level(vus, args, deleted, measure_s, phase, smoke, script)
