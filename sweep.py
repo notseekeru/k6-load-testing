@@ -199,8 +199,8 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False,
     }
     if args.smoke or smoke:
         env.update(RAMP_S="3", WARM_S="3", MEASURE_S="10")
-    if measure_s:
-        env["MEASURE_S"] = str(int(measure_s))
+    elif measure_s or args.measure:
+        env["MEASURE_S"] = str(int(measure_s or args.measure))
     # k6 has no use for the Grafana token; keep it out of the child's environment.
     env.pop("GRAFANA_SERVICE_ACCOUNT_TOKEN", None)
 
@@ -396,6 +396,7 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between levels (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
     parser.add_argument("--identity", choices=("single", "vu"), default="", help="one account for every VU, or one account per VU (IDENTITY from .env when unset)")
+    parser.add_argument("--measure", type=int, help="seconds to measure, overriding MEASURE_S; --smoke and a confirmation keep their own length")
     parser.add_argument("--only", type=int, help="run one level and stop")
     parser.add_argument("--floor", action="store_true", help="run the /health floor window alone and stop")
     parser.add_argument("--confirm-runs", type=int, help=f"confirmation windows at the boundary, all must pass (CONFIRM_RUNS, default {DEFAULT_CONFIRM_RUNS})")
