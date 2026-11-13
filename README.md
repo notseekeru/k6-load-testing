@@ -23,7 +23,9 @@ or `only`. The run's rows are deleted between levels, so every window starts fro
 - A target that takes load without auth, vendor cost or a rate limit. `main.js` refuses to start
   otherwise, before the loop sends anything.
 - An identity of its own for the sweep account, so the cleanup deletes only the run's rows. On the
-  target that is its dev or test identity; here it is `--sweep-sub` or `SWEEP_SUB`.
+  target that is its dev or test identity; here it is `--sweep-sub` or `SWEEP_SUB`. With `--identity vu`
+  every VU sends its own `<SWEEP_SUB>-<session>-<vu>` in `X-Dev-Sub`, which the target takes while auth is
+  off, so a run reads like many accounts instead of one.
 
 ## Configure
 
@@ -38,6 +40,7 @@ nix develop
 k6 run main.js                                          # one level, TARGET_VUS users
 python3 sweep.py --sweep-sub <id>                       # floor, smoke, then the ladder, cleanup between levels
 python3 sweep.py --sweep-sub <id> --only 10 --smoke     # that same smoke, without the ladder
+python3 sweep.py --sweep-sub <id> --identity vu --only 100  # one account per VU, not one account for all
 python3 sweep.py --sweep-sub <id> --floor               # the /health floor alone, no ladder
 python3 sweep.py --sweep-sub <id> --cleanup-only        # delete the run's rows, load nothing
 ```

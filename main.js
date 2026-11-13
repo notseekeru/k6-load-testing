@@ -36,6 +36,13 @@ const ANSWER_MIN_CHARS = 200;
 const ANSWER_MAX_CHARS = 1200;
 const TOKEN = cfg("TOKEN", "");
 const HOST_HEADER = cfg("HOST_HEADER", "");
+// One account per VU comes from the header, so the sub is built per request rather than at init.
+const SUB_PREFIX = (() => {
+    if (cfg("IDENTITY", "single") !== "vu") return "";
+    const sub = cfg("SWEEP_SUB", "");
+    const session = cfg("SWEEP_SESSION", "");
+    return sub && session ? `${sub}-${session}` : "";
+})();
 
 const RAMP_S = num("RAMP_S", 30);
 const WARM_S = num("WARM_S", 60);
@@ -344,6 +351,7 @@ function params(name, tags) {
     const headers = { "Content-Type": "application/json" };
     if (TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
     if (HOST_HEADER) headers.Host = HOST_HEADER;
+    if (SUB_PREFIX) headers["X-Dev-Sub"] = `${SUB_PREFIX}-${__VU}`;
     try {
         if (inMeasure()) MEASURE_REQS.add(1);
     } catch (e) {}

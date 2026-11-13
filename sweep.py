@@ -20,6 +20,7 @@ import itertools
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -75,12 +76,14 @@ PROM_DS = cfg("PROM_DS", "grafanacloud-prom")
 APP_LABEL = cfg("APP_LABEL", "maxterview-backend")
 
 
-def call(method, url, body=None, timeout=120):
+def call(method, url, body=None, timeout=120, sub=""):
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(url, data=data, method=method)
     request.add_header("Content-Type", "application/json")
     if TOKEN:
         request.add_header("Authorization", f"Bearer {TOKEN}")
+    if sub:
+        request.add_header("X-Dev-Sub", sub)
     # The same Host override k6 sends: an ingress that routes by host answers 404 without it.
     if HOST_HEADER:
         request.add_header("Host", HOST_HEADER)
@@ -89,10 +92,10 @@ def call(method, url, body=None, timeout=120):
         return response.status, (json.loads(raw) if raw else None)
 
 
-def all_interviews(api_url):
+def all_interviews(api_url, sub=""):
     rows, offset, limit = [], 0, 200
     while True:
-        _, page = call("GET", f"{api_url}/interviews?limit={limit}&offset={offset}")
+        _, page = call("GET", f"{api_url}/interviews?limit={limit}&offset={offset}", sub=sub)
         page = page or []
         # A short page is the last one. A long one means the target ignores limit/offset, so it is
         # also the last one.
@@ -105,25 +108,50 @@ def all_interviews(api_url):
 # The sweep identity is decision 10 in SRE.md: its own rows, its own turn counter, so a delete set
 # is known to be the run's. Any foreign owner here means the identity is wrong and the abort is the
 # only safe move: this deletes prod's rows.
-def cleanup(api_url, sweep_sub):
+def identity_sub(sweep_sub, session, vu):
+    return f"{sweep_sub}-{session}-{vu}"
+
+
+# Every account this harness ever minted is named by a run's csv: the session is the file's stamp and
+# the ceiling is the highest level in its rows. Old csvs predate the identity column and name nothing.
+def sweep_subs(args):
+    if args.identity == "single":
+        return [args.sweep_sub]
+    subs = []
+    for path in sorted(RESULTS_DIR.glob("sweep-*.csv")):
+        with path.open(newline="") as handle:
+            rows = [row for row in csv.DictReader(handle) if row.get("identity") == "vu"]
+        vus = max((int(row["vus"]) for row in rows if row.get("vus")), default=None)
+        if vus is None:
+            continue
+        session = path.stem.removeprefix("sweep-")
+        subs.extend(identity_sub(args.sweep_sub, session, vu) for vu in range(vus + 1))
+    return subs
+
+
+def cleanup(api_url, subs):
     try:
-        interviews = all_interviews(api_url)
+        with ThreadPoolExecutor(max_workers=DELETE_WORKERS) as pool:
+            listed = list(pool.map(lambda sub: (sub, all_interviews(api_url, sub)), subs))
     except Exception as exc:
         sys.exit(f"ABORT: cannot list interviews at {api_url}: {exc}. Nothing to delete, nothing to load.")
-    interviews = interviews or []
-    owners = {row.get("owner_id") for row in interviews}
-    if owners - {sweep_sub}:
-        sys.exit(f"ABORT: /interviews returned owners {sorted(owners)}; expected only {sweep_sub}")
-    if not interviews:
+    pairs = []
+    for sub, rows in listed:
+        owners = {row.get("owner_id") for row in rows or []}
+        if owners - {sub}:
+            sys.exit(f"ABORT: {sub} returned owners {sorted(owners)}; expected only {sub}. X-Dev-Sub is not reaching the app, or SWEEP_SUB is wrong")
+        pairs.extend((sub, row["id"]) for row in rows or [])
+    if not pairs:
         print("cleanup: nothing to delete")
         return 0
 
     deleted = 0
     failed = 0
 
-    def drop(interview_id):
+    def drop(pair):
+        sub, interview_id = pair
         try:
-            call("DELETE", f"{api_url}/interviews/{interview_id}")
+            call("DELETE", f"{api_url}/interviews/{interview_id}", sub=sub)
             return 1
         except urllib.error.HTTPError as exc:
             return 0 if exc.code == 404 else -1
@@ -133,7 +161,7 @@ def cleanup(api_url, sweep_sub):
     started = time.monotonic()
     pool = ThreadPoolExecutor(max_workers=DELETE_WORKERS)
     try:
-        pending = {pool.submit(drop, row["id"]) for row in interviews}
+        pending = {pool.submit(drop, pair) for pair in pairs}
         done, pending = wait(pending, timeout=CLEANUP_BUDGET_S)
         for future in done:
             result = future.result()
@@ -146,7 +174,8 @@ def cleanup(api_url, sweep_sub):
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     elapsed = time.monotonic() - started
-    print(f"cleanup: {deleted} deleted, {failed} failed, {len(pending)} left behind, {elapsed:.1f}s of {CLEANUP_BUDGET_S}s, owner={sweep_sub}")
+    who = subs[0] if len(subs) == 1 else f"{len(subs)} accounts"
+    print(f"cleanup: {deleted} deleted, {failed} failed, {len(pending)} left behind, {elapsed:.1f}s of {CLEANUP_BUDGET_S}s, owner={who}")
     if failed or pending:
         sys.exit("ABORT: cleanup left rows behind, the next level would read a bigger account than the last")
     return deleted
@@ -161,6 +190,9 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False,
         **os.environ,
         "API_URL": args.api_url,
         "TARGET_VUS": str(int(level)),
+        "SWEEP_SUB": args.sweep_sub,
+        "SWEEP_SESSION": args.session,
+        "IDENTITY": args.identity,
         **({"FLOOR_RPS": str(FLOOR_RPS)} if script == "floor.js" else {}),
         "SUMMARY_PATH": str(summary_path),
     }
@@ -204,6 +236,7 @@ def run_level(level, args, deleted, measure_s=None, phase="ladder", smoke=False,
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "run_id": run_id,
         "label": args.label,
+        "identity": args.identity,
         "measure_start": window_start,
         "phase": phase,
         "vus": int(level),
@@ -361,6 +394,7 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="shorten every window, for --only")
     parser.add_argument("--no-cleanup", action="store_true", help="keep rows between levels (do not)")
     parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--identity", choices=("single", "vu"), default="", help="one account for every VU, or one account per VU (IDENTITY from .env when unset)")
     parser.add_argument("--only", type=int, help="run one level and stop")
     parser.add_argument("--floor", action="store_true", help="run the /health floor window alone and stop")
     parser.add_argument("--confirm-runs", type=int, help=f"confirmation windows at the boundary, all must pass (CONFIRM_RUNS, default {DEFAULT_CONFIRM_RUNS})")
@@ -371,11 +405,15 @@ def main():
     args.sweep_sub = args.sweep_sub or cfg("SWEEP_SUB")
     args.label = args.label or cfg("LABEL")
     args.confirm_runs = args.confirm_runs if args.confirm_runs is not None else int(cfg("CONFIRM_RUNS", DEFAULT_CONFIRM_RUNS))
+    args.identity = args.identity or cfg("IDENTITY", "single")
+    if args.identity not in ("single", "vu"):
+        sys.exit(f"ABORT: --identity must be single or vu, got {args.identity}")
     if not args.api_url:
         sys.exit("ABORT: --api-url or API_URL in .env is required")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     self_check()
     csv_path = RESULTS_DIR / f"sweep-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
+    args.session = csv_path.stem.removeprefix("sweep-")
     if args.start < 1:
         sys.exit("ABORT: --start must be at least 1, or the ladder never advances")
     if args.confirm_runs < 1:
@@ -387,7 +425,7 @@ def main():
         sys.exit("ABORT: --sweep-sub or SWEEP_SUB must name the sweep identity (DEV_USER_SUB), not dev-user")
 
     if args.cleanup_only:
-        cleanup(args.api_url, args.sweep_sub)
+        cleanup(args.api_url, sweep_subs(args))
         return
 
     if args.smoke and not args.only:
@@ -493,11 +531,13 @@ def self_check():
     assert tolerance(SMOKE_VUS) < 10, "the search has to resolve the band between the smoke and the first level, not skip it"
     assert DEFAULT_CONFIRM_RUNS >= 2, "one window is not a confirmed boundary"
     assert GAP_S * 2 + CLEANUP_BUDGET_S <= 60, "the gap has to stay inside asyncpg's idle close and Neon's scale-to-zero"
+    assert re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", identity_sub("k6-sweep-testing", "20261113T082150Z", 100)), "the app 400s a sub outside its X-Dev-Sub charset"
 
 
-def account_size(api_url):
+def account_size(api_url, subs):
     try:
-        return len(all_interviews(api_url))
+        with ThreadPoolExecutor(max_workers=DELETE_WORKERS) as pool:
+            return sum(len(rows or []) for rows in pool.map(lambda sub: all_interviews(api_url, sub), subs))
     except Exception:
         return None
 
@@ -505,11 +545,11 @@ def account_size(api_url):
 def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run="", script="main.js"):
     if between:
         time.sleep(GAP_S)
-    deleted = 0 if args.no_cleanup or phase == "floor" else cleanup(args.api_url, args.sweep_sub)
+    deleted = 0 if args.no_cleanup or phase == "floor" else cleanup(args.api_url, sweep_subs(args))
     if between:
         time.sleep(GAP_S)
     row = run_level(vus, args, deleted, measure_s, phase, smoke, script)
-    row["rows_after"] = account_size(args.api_url)
+    row["rows_after"] = account_size(args.api_url, sweep_subs(args))
     row["confirm_run"] = confirm_run
     return row
 
