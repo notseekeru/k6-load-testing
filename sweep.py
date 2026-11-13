@@ -114,19 +114,20 @@ def identity_sub(sweep_sub, session, vu):
 
 # Every account this harness ever minted is named by a run's csv: the session is the file's stamp and
 # the ceiling is the highest level in its rows. Old csvs predate the identity column and name nothing.
-def sweep_subs(args):
+def sweep_subs(args, vus=0):
     if args.identity == "single":
         return [args.sweep_sub]
     subs = []
     for path in sorted(RESULTS_DIR.glob("sweep-*.csv")):
         with path.open(newline="") as handle:
             rows = [row for row in csv.DictReader(handle) if row.get("identity") == "vu"]
-        vus = max((int(row["vus"]) for row in rows if row.get("vus")), default=None)
-        if vus is None:
+        highest = max((int(row["vus"]) for row in rows if row.get("vus")), default=None)
+        if highest is None:
             continue
         session = path.stem.removeprefix("sweep-")
-        subs.extend(identity_sub(args.sweep_sub, session, vu) for vu in range(vus + 1))
-    return subs
+        subs.extend(identity_sub(args.sweep_sub, session, vu) for vu in range(highest + 1))
+    subs.extend(identity_sub(args.sweep_sub, args.session, vu) for vu in range(vus + 1))
+    return list(dict.fromkeys(subs))
 
 
 def cleanup(api_url, subs):
@@ -545,11 +546,12 @@ def account_size(api_url, subs):
 def run_one(vus, args, between=False, measure_s=None, phase="ladder", smoke=False, confirm_run="", script="main.js"):
     if between:
         time.sleep(GAP_S)
-    deleted = 0 if args.no_cleanup or phase == "floor" else cleanup(args.api_url, sweep_subs(args))
+    subs = sweep_subs(args, vus)
+    deleted = 0 if args.no_cleanup or phase == "floor" else cleanup(args.api_url, subs)
     if between:
         time.sleep(GAP_S)
     row = run_level(vus, args, deleted, measure_s, phase, smoke, script)
-    row["rows_after"] = account_size(args.api_url, sweep_subs(args))
+    row["rows_after"] = account_size(args.api_url, subs)
     row["confirm_run"] = confirm_run
     return row
 
