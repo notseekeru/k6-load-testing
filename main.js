@@ -94,10 +94,13 @@ export const options = {
 // Asserted from the API rather than trusted: nothing loads unless the tier is dev and the model is
 // the stub.
 export function setup() {
-    const usage = http.get(`${API}/usage`, params("GET /api/usage"));
+    const usage = http.get(
+        `${API}/billing/usage`,
+        params("GET /api/billing/usage"),
+    );
     if (usage.status !== 200)
         fail(
-            `GET /usage answered ${usage.status}: cannot confirm the perf window`,
+            `GET /billing/usage answered ${usage.status}: cannot confirm the perf window`,
         );
     const u = safe(usage);
     if (u.tier !== "dev")
@@ -172,7 +175,7 @@ export default function () {
     // in the loop.
     send("POST", "/interviews/{id}/start", null, [200], id);
 
-    let closing = stream("/interviews/{id}/chat/kickoff", null, "opener", id);
+    let closing = stream("/interviews/{id}/chat/opening", null, "opener", id);
     const turns = Math.min(randInt(TURNS_MIN, TURNS_MAX), plannedQuestions(safe(created)));
     // The draw can only break silently: a zero skips the loop and every check inside it, so the run
     // would report clean without ever asking a question.
@@ -183,7 +186,7 @@ export default function () {
             interview_id: id,
             content: answerText(),
         });
-        closing = stream("/interviews/{id}/chat/stream", body, "answer", id);
+        closing = stream("/interviews/{id}/chat/send", body, "answer", id);
     }
 
     const finished = http.post(
@@ -240,8 +243,8 @@ function stream(route, body, label, id) {
 // reported.
 function transcript(id) {
     const res = http.get(
-        `${API}/interviews/${id}/messages`,
-        params("GET /api/interviews/{id}/messages"),
+        `${API}/interviews/${id}/chat`,
+        params("GET /api/interviews/{id}/chat"),
     );
     if (!check(res, { "transcript: 200": (r) => r.status === 200 })) return;
     const rows = safe(res) || [];
@@ -265,7 +268,7 @@ const READS = [
     "/interviews",
     "/stats/analytics",
     "/stats/dashboard",
-    "/usage",
+    "/billing/usage",
     "/templates",
     "/resumes",
     "/settings/llm",
